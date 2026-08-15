@@ -1,0 +1,22 @@
+services:
+  caddy:
+    image: caddy:2.10-alpine
+    network_mode: host
+    depends_on:
+      backend:
+        condition: service_started
+      frontend:
+        condition: service_started
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    restart: unless-stopped
+
+networks:
+  default:
+    name: multica_default
+    # Synology Container Manager's default address pools are exhausted on this
+    # NAS. Keep Multica on an explicit, unused private subnet so compose can
+    # recreate the stack deterministically.
+    ipam:
+      config:
+        - subnet: 10.253.0.0/24

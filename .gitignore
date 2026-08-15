@@ -1,0 +1,18 @@
+# Operator state and secrets
+.env
+.env.*
+!.env.template
+deploy.json
+dist/
+generated/
+
+# Python/runtime artifacts
+__pycache__/
+*.py[cod]
+*.log
+.pytest_cache/
+
+# Local editor/OS files
+.DS_Store
+.idea/
+.vscode/
