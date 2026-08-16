@@ -4,6 +4,10 @@
 
 这个部署入口只负责 Multica 本身，不依赖 Agent 治理仓、Skill 仓或具体 Agent 工具。其它系统通过可选适配器接入，不进入 NAS 部署生命周期。
 
+<img src="assets/mascot/multica-sentinel.gif" width="320" alt="Alice，Multica 的黑白 CRT 终端看板娘，置于麦金塔式诊断界面中。">
+
+这只是文档中的状态陪伴视觉；需要减弱动效或展示在密集操作界面时，请使用[静态 PNG](assets/mascot/multica-sentinel-still.png)。
+
 ## 先记住四件事
 
 - 部署入口是私网 HTTP：地址由你传入的 `--nas-ip` 和 `--app-port` 生成。Caddy 只绑定这个地址；没有配置 HTTPS，也不要把 3010、3011、3012 端口映射到公网。
