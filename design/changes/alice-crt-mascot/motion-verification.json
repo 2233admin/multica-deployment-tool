@@ -1,0 +1,17 @@
+{
+  "schema": "design-pipeline.motion-verification.v1",
+  "id": "alice-crt-idle-orbit",
+  "primitiveId": "transform.orbit",
+  "trigger": "documentation asset is visible",
+  "purpose": "communicate a stable active terminal signal without implying task progress",
+  "durationMs": 3000,
+  "toleranceMs": 0,
+  "observedDurationMs": 3000,
+  "frameCadenceMs": 250,
+  "interruption": "not interactive; replace with the static PNG where motion should not play",
+  "reducedMotion": "assets/mascot/multica-sentinel-still.png",
+  "longFrames": [],
+  "maxLongFrameMs": 16,
+  "captureId": "pillow-12-frame-3-second-orbit",
+  "deterministic": true
+}

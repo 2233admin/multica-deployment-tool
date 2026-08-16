@@ -6,6 +6,10 @@ It is designed for the awkward parts of self-hosting: first-run setup, target-ho
 
 中文文档：[README.zh-CN.md](README.zh-CN.md)
 
+<img src="assets/mascot/multica-sentinel.gif" width="320" alt="Alice, Multica's monochrome CRT terminal companion, framed by a Macintosh-style diagnostic interface.">
+
+The mascot is documentation-only. For reduced motion or a static surface, use [the still PNG](assets/mascot/multica-sentinel-still.png) instead of the GIF.
+
 ## What it supports
 
 - Windows, Linux, or macOS as the management machine

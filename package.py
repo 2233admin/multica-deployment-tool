@@ -29,6 +29,8 @@ FILES = (
     ("multica-tool.sh", "multica-tool.sh"),
     ("package.py", "package.py"),
     ("README.zh-CN.md", "README.zh-CN.md"),
+    ("assets/mascot/multica-sentinel.gif", "assets/mascot/multica-sentinel.gif"),
+    ("assets/mascot/multica-sentinel-still.png", "assets/mascot/multica-sentinel-still.png"),
     ("compat/windows/status.ps1", "compat/windows/status.ps1"),
     ("test_multica_deploy.py", "test_multica_deploy.py"),
     ("compat/windows/verification-code.ps1", "compat/windows/verification-code.ps1"),
