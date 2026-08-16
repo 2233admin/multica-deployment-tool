@@ -35,6 +35,17 @@ For `build` from a Multica checkout, also install Docker Desktop or a Linux Dock
 
 The `--nas-*` option names are kept for compatibility, but the target does not have to be a NAS. A Windows Docker target is not part of this version yet: the remote deployment flow relies on a POSIX shell, `sudo`, `sed`, `curl`, and Linux-style Compose paths. Docker Desktop on Windows is fully supported as the local builder.
 
+### NetBird private overlay
+
+Pass `--netbird` with the NAS NetBird IPv4 address in `--nas-ip` to deploy a cross-site private endpoint. Before changing the stack, the tool verifies that NetBird is running on the target, connected to management and signal services, and using the requested address. Caddy is bound only to that address, and NetBird health checks bypass the management machine's HTTP proxy.
+
+```bash
+python3 multica_deploy.py deploy \
+  --nas-host nas --nas-ip 100.80.110.105 --netbird
+```
+
+Every desktop or remote device must join the same NetBird network and be allowed to reach TCP 3010 on the target. Use the NetBird address as the Multica server URL and exclude the NetBird range from any local HTTP proxy. Use `--no-netbird` to override a saved NetBird setting when intentionally switching back to a normal private-LAN deployment.
+
 ## Quick start
 
 Clone the repository and run the guided installer from its root:

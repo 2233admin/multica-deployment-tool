@@ -4,6 +4,10 @@
 }
 
 http://NAS_IP:3010 {
+  # Keep the proxy off every other NAS interface. This makes the generated
+  # endpoint usable only on the selected private overlay address.
+  bind NAS_IP
+
   @backend_health path /health /readyz
   handle @backend_health {
     reverse_proxy 127.0.0.1:3011

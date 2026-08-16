@@ -6,10 +6,23 @@
 
 ## 先记住四件事
 
-- 部署入口是内网 HTTP：地址由你传入的 `--nas-ip` 和 `--app-port` 生成。没有配置 HTTPS，也不要把 3010、3011、3012 端口映射到公网。
+- 部署入口是私网 HTTP：地址由你传入的 `--nas-ip` 和 `--app-port` 生成。Caddy 只绑定这个地址；没有配置 HTTPS，也不要把 3010、3011、3012 端口映射到公网。
 - 部署目标上的 `.env` 含 JWT、数据库和 VCS 密钥，只在目标主机保存，脚本升级时不会覆盖；不要把它复制到聊天、工单或 Git。
 - Multica 当前生产登录仍是邮箱验证码；现在也支持把内网 Gitea 作为 OAuth2/OIDC 登录源。想要纯内网体验，优先配置 Gitea 登录，SMTP 作为回退。
 - 只有开发/验收时才使用“内网测试固定验证码”。它会把 `APP_ENV` 切到非生产并关闭发信服务，不能作为公网或正式生产登录方案。
+
+## NetBird 跨设备访问（推荐）
+
+使用 `--netbird` 后，`--nas-ip` 必须填写 NAS 的 NetBird IPv4 地址。工具会在写入配置前核验 NAS 上 NetBird 的管理、信令连接和实际 IP；并把这个地址写入 Caddy、CORS、`MULTICA_APP_URL` 和 Gitea OAuth 默认回调。Caddy 只监听该 NetBird 地址，不接受 LAN 或公网接口的 3010 连接。
+
+```powershell
+python .\multica_deploy.py deploy `
+  --nas-host nas --nas-ip 100.80.110.105 --netbird `
+  --docker-path /var/packages/ContainerManager/target/usr/bin/docker `
+  --nas-target /volume1/docker/multica --owner YOUR_SSH_USER --group users
+```
+
+其他桌面端和 5090 等异地设备必须加入同一个 NetBird 网络，并被策略允许访问 NAS 的 TCP 3010；客户端统一使用 `http://100.80.110.105:3010`。如设备使用本地 HTTP 代理，请将 NetBird 地址段加入 `NO_PROXY`。Gitea OAuth 应用的回调地址必须精确填写为 `http://100.80.110.105:3010/auth/callback`。
 
 ## 文件职责
 

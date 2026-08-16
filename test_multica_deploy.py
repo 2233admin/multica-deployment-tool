@@ -34,6 +34,36 @@ class DeploymentToolTests(unittest.TestCase):
         )
         multica_deploy.validate_config(args)
 
+    def test_netbird_mode_is_available_and_validated(self):
+        parser = multica_deploy.build_parser()
+        args = parser.parse_args(
+            [
+                "deploy",
+                "--nas-host",
+                "nas",
+                "--nas-ip",
+                "100.80.110.105",
+                "--netbird",
+            ]
+        )
+        multica_deploy.validate_config(args)
+        self.assertTrue(args.netbird)
+
+    def test_netbird_verification_checks_connection_and_ip(self):
+        args = argparse.Namespace(
+            netbird=True,
+            nas_ip="100.80.110.105",
+            app_port=3010,
+            docker_path="docker",
+            no_sudo=False,
+        )
+        with patch.object(multica_deploy, "remote") as remote:
+            multica_deploy.verify_netbird_endpoint(args)
+        command = remote.call_args.args[1]
+        self.assertIn("Management: Connected", command)
+        self.assertIn("Signal: Connected", command)
+        self.assertIn("NetBird IP: 100.80.110.105/", command)
+
     def test_platform_aliases_normalize_for_cross_arch_builds(self):
         self.assertEqual(multica_deploy.normalize_platform("x86_64"), "linux/amd64")
         self.assertEqual(multica_deploy.normalize_platform("aarch64"), "linux/arm64")
