@@ -411,7 +411,7 @@ def read_release_state(args: argparse.Namespace) -> dict[str, str]:
         if key in {"MULTICA_IMAGE_TAG", "MULTICA_BACKEND_IMAGE", "MULTICA_WEB_IMAGE"}:
             state[key] = value
     if not state.get("MULTICA_IMAGE_TAG"):
-        raise ConfigError("NAS 上没有可回滚的上一版本记录。先成功部署一次新版本后才能回滚。")
+        raise ConfigError("部署目标上没有可回滚的上一版本记录。先成功部署一次新版本后才能回滚。")
     return state
 
 
@@ -945,7 +945,7 @@ def configure_connection(args: argparse.Namespace) -> None:
     owner_default = detected.get("user") or owner_default
     group_default = detected.get("group") or group_default
     advanced = prompt_default("需要修改目录/Docker/用户组等高级参数？（y/N）", "n").lower() == "y"
-    args.nas_target = prompt_default("NAS 部署目录", target_default) if advanced else target_default
+    args.nas_target = prompt_default("部署目标目录", target_default) if advanced else target_default
     args.docker_path = prompt_default("Docker 命令/路径", docker_default) if advanced else docker_default
     args.owner = prompt_required("远端目录所有者/SSH 用户", owner_default)
     args.group = prompt_default("远端目录组", group_default) if advanced else group_default
@@ -1462,7 +1462,7 @@ def deploy(args: argparse.Namespace) -> None:
     finally:
         rendered_caddy.unlink(missing_ok=True)
 
-    print("[4/6] 初始化或更新非敏感配置（保留 NAS 上已有密钥）...")
+    print("[4/6] 初始化或更新非敏感配置（保留部署目标上已有密钥）...")
     initialize_remote_env(args)
     remote(
         args,
@@ -1554,7 +1554,7 @@ def add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--nas-host", default=DEFAULTS["nas_host"], help="SSH 主机、IP 或别名")
     parser.add_argument("--ssh-port", type=int, default=0, help="SSH 端口；0 表示使用 SSH 配置")
     parser.add_argument("--nas-ip", default=DEFAULTS["nas_ip"], help="内网访问 IP")
-    parser.add_argument("--nas-target", default=DEFAULTS["nas_target"], help="NAS 部署目录")
+    parser.add_argument("--nas-target", default=DEFAULTS["nas_target"], help="远端部署目录（历史参数名保留 nas）")
     parser.add_argument(
         "--docker-path",
         default=DOCKER_PATH,
@@ -1628,7 +1628,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="构建目标架构；auto 自动读取 NAS，架构不同时使用 buildx",
     )
 
-    doctor_parser = subparsers.add_parser("doctor", help="只读检查本机和 NAS 部署环境")
+    doctor_parser = subparsers.add_parser("doctor", help="只读检查本机和远端部署环境")
     add_common(doctor_parser)
     doctor_parser.add_argument("--app-port", type=int, default=DEFAULTS["app_port"])
 

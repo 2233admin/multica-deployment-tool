@@ -6,7 +6,7 @@
 # Do NOT change these bindings to 0.0.0.0 — Docker bypasses host firewalls
 # (UFW/iptables) by default, so raw ports would be exposed to the internet.
 # This deployment file refuses to start unless JWT_SECRET and POSTGRES_PASSWORD
-# are set; the deployment tool generates them in the NAS-only .env. See:
+# are set; the deployment tool generates them in the target-only .env. See:
 #   apps/docs/content/docs/self-host-quickstart.mdx
 #
 # Usage:

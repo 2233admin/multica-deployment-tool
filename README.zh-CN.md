@@ -7,7 +7,7 @@
 ## 先记住四件事
 
 - 部署入口是内网 HTTP：地址由你传入的 `--nas-ip` 和 `--app-port` 生成。没有配置 HTTPS，也不要把 3010、3011、3012 端口映射到公网。
-- NAS 上的 `.env` 含 JWT、数据库和 VCS 密钥，只在 NAS 保存，脚本升级时不会覆盖；不要把它复制到聊天、工单或 Git。
+- 部署目标上的 `.env` 含 JWT、数据库和 VCS 密钥，只在目标主机保存，脚本升级时不会覆盖；不要把它复制到聊天、工单或 Git。
 - Multica 当前生产登录仍是邮箱验证码；现在也支持把内网 Gitea 作为 OAuth2/OIDC 登录源。想要纯内网体验，优先配置 Gitea 登录，SMTP 作为回退。
 - 只有开发/验收时才使用“内网测试固定验证码”。它会把 `APP_ENV` 切到非生产并关闭发信服务，不能作为公网或正式生产登录方案。
 
@@ -25,11 +25,21 @@
 | `docker-compose.selfhost.yml` | Multica 官方 PostgreSQL、backend、frontend 定义 |
 | `docker-compose.nas.yml` | NAS 专用 Caddy 和固定 Docker 子网 |
 | `Caddyfile` | 同源入口、backend 健康检查和 WebSocket 转发 |
-| `.env.template` | 非敏感默认配置；真实 `.env` 在 NAS 上首次部署时生成 |
+| `.env.template` | 非敏感默认配置；真实 `.env` 在部署目标首次部署时生成 |
 
 ## 推荐入口：部署工具
 
 这不是把当前 NAS 配置打包进去的快照，而是一个可重复使用的部署工具。它只需要 Python 3.9+、对应平台的 OpenSSH（Windows OpenSSH、Linux `openssh-client` 或 macOS OpenSSH），不需要安装 pip 包。
+
+### 平台支持矩阵
+
+| 角色 | 支持范围 |
+| --- | --- |
+| 管理机 | Windows、Linux、macOS |
+| 本地构建机 | Windows/macOS 的 Docker Desktop，或 Linux Docker |
+| 远端部署目标 | Synology Container Manager，或可通过 SSH 管理的 Linux Docker 主机 |
+
+命令里的 `--nas-*` 是历史兼容命名，目标不一定是 NAS。当前版本还没有把 Windows Docker 主机作为远端部署目标：远程流程依赖 POSIX shell、`sudo`、`sed`、`curl` 和 Linux 风格的 Compose 路径；但 Windows Docker Desktop 作为本机构建机是支持的。
 
 ### 给新用户的最短路径
 
@@ -54,11 +64,11 @@ cd multica-deployment-tool
 python3 install.py
 ```
 
-安装器会检查 `ssh/scp`，然后进入引导安装：填写 SSH 主机和端口后，它会尽力自动探测远端用户、用户组和 Docker 路径；接着选择 Synology 或普通 Linux，确认 NAS IP 后直接部署。部署完成后会询问登录验证方式：Gitea（内网推荐）、内网 SMTP、内网测试固定验证码、Resend 或稍后配置。常见 Synology 场景只需几次输入；需要改目录、Docker 或用户组时再展开高级参数。不会修改源码，也不要求手工编辑 `.env`。
+安装器会检查 `ssh/scp`，然后进入引导安装：填写 SSH 主机和端口后，它会尽力自动探测远端用户、用户组和 Docker 路径；接着选择 Synology 或普通 Linux，确认目标地址后直接部署。部署完成后会询问登录验证方式：Gitea（内网推荐）、内网 SMTP、内网测试固定验证码、Resend 或稍后配置。常见 Synology 场景只需几次输入；需要改目录、Docker 或用户组时再展开高级参数。不会修改源码，也不要求手工编辑 `.env`。
 
 推荐在任何平台运行 `python multica_deploy.py wizard`；Linux/macOS 也可以运行 `bash multica-tool.sh`。Windows 的 `.cmd` / PowerShell 兼容入口放在 `compat/windows/`，不是核心安装依赖。菜单里可以部署、查看状态、配置登录验证、配置 GitHub 或查看日志；密码不会写进命令行。
 
-第一次在菜单里选择“修改 NAS 连接参数”，填完后会把非敏感连接参数保存到当前用户的配置目录。配置文件不在源码目录，也不会进入开源压缩包；数据库、JWT、SMTP、GitHub 私钥等秘密仍只在 NAS 上保存。
+第一次在菜单里选择“修改 NAS 连接参数”，填完后会把非敏感连接参数保存到当前用户的配置目录。配置文件不在源码目录，也不会进入开源压缩包；数据库、JWT、SMTP、GitHub 私钥等秘密仍只在部署目标上保存。
 
 ```powershell
 python .\multica_deploy.py wizard
@@ -114,11 +124,11 @@ python .\multica_deploy.py rollback `
   --nas-host YOUR_SSH_HOST --nas-ip YOUR_NAS_IP
 ```
 
-每次成功部署前，工具只记录上一个 backend/web 镜像引用到 NAS 的受限状态文件，不保存 JWT、数据库密码或 Gitea Secret。回滚不会猜测数据库迁移是否可逆；如果新版本已经执行了不可逆迁移，应先恢复数据库快照，再回滚镜像。
+每次成功部署前，工具只记录上一个 backend/web 镜像引用到部署目标的受限状态文件，不保存 JWT、数据库密码或 Gitea Secret。回滚不会猜测数据库迁移是否可逆；如果新版本已经执行了不可逆迁移，应先恢复数据库快照，再回滚镜像。
 
 ### 修改 Multica 后一条命令重新部署
 
-如果你修改了自己的 Multica fork，不需要手工执行 `docker build`、`docker save`、`scp`、`docker load` 和 Compose 重启。部署工具可以直接从当前源码构建 backend/web 镜像，传到 NAS 的 Docker，再重启并检查健康状态：
+如果你修改了自己的 Multica fork，不需要手工执行 `docker build`、`docker save`、`scp`、`docker load` 和 Compose 重启。部署工具可以直接从当前源码构建 backend/web 镜像，传到远端 Docker，再重启并检查健康状态：
 
 ```powershell
 python .\multica_deploy.py build `
@@ -127,7 +137,7 @@ python .\multica_deploy.py build `
   --image-tag dev-20260816
 ```
 
-首次执行会保存 `--source-dir`；之后可以省略它。这个流程使用 NAS 临时镜像归档，不要求搭建 Docker Registry。工具会读取本机和 NAS 的 Docker 架构；架构相同时使用 Compose 构建，架构不同时自动切换 Docker buildx：
+首次执行会保存 `--source-dir`；之后可以省略它。这个流程使用远端临时镜像归档，不要求搭建 Docker Registry。工具会读取本机和远端 Docker 的架构；架构相同时使用 Compose 构建，架构不同时自动切换 Docker buildx：
 
 ```powershell
 python .\multica_deploy.py build `
@@ -167,7 +177,7 @@ python .\multica_deploy.py deploy `
   --image-tag v0.4.28
 ```
 
-镜像仓库地址只保存在本地非敏感部署配置和 NAS `.env` 中；不要把 registry 密码写进命令行。私有仓库登录应提前在 NAS 上完成 `docker login`，部署工具只负责拉取和启动。
+镜像仓库地址只保存在本地非敏感部署配置和部署目标的 `.env` 中；不要把 registry 密码写进命令行。私有仓库登录应提前在目标主机上完成 `docker login`，部署工具只负责拉取和启动。
 
 ## Windows 兼容层
 
@@ -181,12 +191,12 @@ Windows Agent 需要绑定本机 daemon 时，可以运行：
 
 ## 升级、回滚和 Gitea 变更
 
-把 Multica 当成“固定版本镜像 + NAS 上持久化数据”来维护，不要在 NAS 容器里手工改源码，也不要使用 `latest`。Gitea 的 Client Secret、JWT 和数据库密码都保存在 NAS 部署目录的 `.env`；部署工具上传新模板时只更新非敏感项，不会覆盖已有 `.env`。
+把 Multica 当成“固定版本镜像 + 部署目标上的持久化数据”来维护，不要在容器里手工改源码，也不要使用 `latest`。Gitea 的 Client Secret、JWT 和数据库密码都保存在目标部署目录的 `.env`；部署工具上传新模板时只更新非敏感项，不会覆盖已有 `.env`。
 
 ### 日常升级
 
 1. 先确认要部署的镜像标签。带 Gitea 登录的版本必须同时包含对应的 backend 和 web 镜像；只改 `.env` 不会给旧镜像增加 Gitea 按钮。
-2. 在升级前备份数据库和 `.env`。至少保存 NAS 上的 `.env`，数据库备份按 NAS 的 PostgreSQL 维护方式执行。
+2. 在升级前备份数据库和 `.env`。至少保存部署目标上的 `.env`，数据库备份按目标主机的 PostgreSQL 维护方式执行。
 3. 使用新标签部署，保留旧标签作为回滚点：
 
 ```powershell
@@ -215,7 +225,7 @@ Gitea 支持目前是我们维护的 fork 变更，不是上游 Multica 自动�
 1. 在源码仓库把上游 `main` 合并或 rebase 到自己的 Gitea 分支。
 2. 解决认证路由、登录页和配置接口的冲突，跑 backend Go 测试和前端测试。
 3. 构建并发布新的、不可变的 backend/web 镜像标签。
-4. 用上面的升级命令部署；NAS 上的 Gitea 配置和用户数据不需要重新注册。
+4. 用上面的升级命令部署；目标主机上的 Gitea 配置和用户数据不需要重新注册。
 
 因此，平时升级不需要重新填写 Gitea Client ID/Secret。只有 Gitea 实例地址、回调地址或 OAuth 应用本身变了，才重新运行 `gitea` 配置向导。旧 NAS 镜像没有 Gitea 功能时，先发布带补丁的新镜像，再升级标签。
 
@@ -298,7 +308,7 @@ http://YOUR_NAS_IP:3010/auth/callback
 
 安装器会询问 Gitea 地址、Client ID、Client Secret 和回调地址。Gitea 地址只填实例根地址，例如 `http://gitea.internal:3000`，不要把 `/login/oauth/authorize` 拼进去。Gitea 和 Multica 必须能从访问者浏览器互相访问；纯内网 HTTP 可以工作，公网回调不是必需的。
 
-注意：Gitea 登录需要使用包含该功能的 Multica backend/web 镜像。已有的旧版 GHCR 镜像不会因为 `.env` 多了几个变量就自动获得登录按钮；从源码验收时，在 Multica 源码目录运行 `make selfhost-build`，或先发布带该功能的新镜像标签，再让 NAS 部署该标签。
+注意：Gitea 登录需要使用包含该功能的 Multica backend/web 镜像。已有的旧版 GHCR 镜像不会因为 `.env` 多了几个变量就自动获得登录按钮；从源码验收时，在 Multica 源码目录运行 `make selfhost-build`，或先发布带该功能的新镜像标签，再让部署目标使用该标签。
 
 也可以在 `python multica_deploy.py wizard` / `bash multica-tool.sh` 的菜单中选择“配置登录验证”。
 
@@ -315,7 +325,7 @@ http://YOUR_NAS_IP:3010/auth/callback
 | Claude Code、Codex、OMP、OpenClaw 等本地工具 | 否 | 安装在各 agent 设备，创建 runtime profile 或设置可执行文件路径 |
 | 修改 Multica backend、web、CLI、daemon 或内置插件运行时 | 是 | 从 fork 构建新的 backend/web/CLI 镜像或二进制，再按版本升级 |
 
-Private Skill Plugin V1 是声明式 Skill 包，不是任意 Python/Node/WASM 插件执行器。NAS 上启用它：
+Private Skill Plugin V1 是声明式 Skill 包，不是任意 Python/Node/WASM 插件执行器。在部署目标上启用它：
 
 ```powershell
 python .\multica_deploy.py plugins --nas-host YOUR_SSH_HOST --nas-ip YOUR_NAS_IP
@@ -412,16 +422,16 @@ $env:MULTICA_CODEX_PATH = "C:\\tools\\codex.cmd"
 
 然后重启 daemon。Multica 的 agent 设置里再选择对应 runtime；不要把不同设备上的本地 API key 当成服务端共享配置。官方 daemon 会扫描 PATH 并注册本机检测到的工具，安装新工具或改 PATH 后需要重启 daemon。
 
-## NAS 服务端前置条件
+## 远端服务端前置条件
 
-当前默认部署目标是 Synology NAS。管理机可以是 Windows、Linux 或 macOS；共同前提是：
+目标主机支持 Synology Container Manager 或普通 Linux Docker。管理机可以是 Windows、Linux 或 macOS；当前远程部署流程不支持 Windows Docker 主机，因为它依赖 POSIX shell 和 Linux 风格的 Compose 路径。共同前提是：
 
-1. 能用 OpenSSH 登录 NAS。你可以任选其一：
+1. 能用 OpenSSH 登录目标主机。你可以任选其一：
    - 在 `~/.ssh/config` 建立任意 SSH 别名；
    - 或在命令中传 `--nas-host` 和 `--ssh-port`（SSH 端口为 22 时可直接使用）。
-2. NAS 上已经安装 Synology Container Manager，且登录用户可以无密码执行 `sudo -n`。
-3. 通用默认目标目录为 `/opt/multica`，Docker 命令为 `docker`。Synology 通常需要额外填写 `--nas-target /volume1/docker/multica`、`--docker-path /var/packages/ContainerManager/target/usr/bin/docker`，以及实际 SSH 用户和组。
-4. 管理机能访问 NAS 的内网地址和 3010 端口。
+2. Synology 上安装 Container Manager，或 Linux 主机安装 Docker Engine + Compose；登录用户可以直接运行 Docker，或可以无密码执行 `sudo -n`。
+3. 通用 Linux 默认目录为 `/opt/multica`、Docker 命令为 `docker`。Synology 通常需要额外填写 `--nas-target /volume1/docker/multica`、`--docker-path /var/packages/ContainerManager/target/usr/bin/docker`，以及实际 SSH 用户和组。
+4. 管理机能访问部署目标的内网地址和 3010 端口。
 
 SSH 别名示例（请替换成自己的主机、端口和用户名）：
 
@@ -481,7 +491,7 @@ python .\multica_deploy.py deploy --nas-host YOUR_SSH_HOST --nas-ip YOUR_NAS_IP 
 
 脚本的安全行为：
 
-- 首次运行才创建 `.env`，并在 NAS 上生成随机 `JWT_SECRET`、`POSTGRES_PASSWORD`、`MULTICA_VCS_SECRET_KEY`。
+- 首次运行才创建 `.env`，并在部署目标上生成随机 `JWT_SECRET`、`POSTGRES_PASSWORD`、`MULTICA_VCS_SECRET_KEY`。
 - 后续运行只更新镜像标签、端口和 URL，不覆盖现有密钥。
 - 服务端口继续绑定 `127.0.0.1`，只有 Caddy 的 3010 对内网开放。
 - 使用 `scp -O`，绕开部分 Synology 环境不兼容 SFTP 的问题。

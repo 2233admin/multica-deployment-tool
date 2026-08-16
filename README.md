@@ -2,7 +2,7 @@
 
 An independent installer and maintenance CLI for running [Multica](https://github.com/multica-ai/multica) inside your network.
 
-It is designed for the awkward parts of self-hosting: first-run setup, Synology path discovery, NAS-only secrets, source builds, upgrades, health checks, and safe rollback. It does not merge Multica with `agent-control`, `agent-plugins`, or Gitea; those remain optional integrations.
+It is designed for the awkward parts of self-hosting: first-run setup, target-host path discovery, secrets stored only on the deployment target, source builds, upgrades, health checks, and safe rollback. It does not merge Multica with `agent-control`, `agent-plugins`, or Gitea; those remain optional integrations.
 
 中文文档：[README.zh-CN.md](README.zh-CN.md)
 
@@ -25,6 +25,16 @@ For a normal image deployment:
 
 For `build` from a Multica checkout, also install Docker Desktop or a Linux Docker daemon. Cross-architecture builds require Docker buildx.
 
+## Platform matrix
+
+| Role | Supported environments |
+| --- | --- |
+| Management machine | Windows, Linux, macOS |
+| Local image builder | Docker Desktop on Windows/macOS, or Linux Docker |
+| Remote deployment target | Synology Container Manager or a Linux Docker host reached through SSH |
+
+The `--nas-*` option names are kept for compatibility, but the target does not have to be a NAS. A Windows Docker target is not part of this version yet: the remote deployment flow relies on a POSIX shell, `sudo`, `sed`, `curl`, and Linux-style Compose paths. Docker Desktop on Windows is fully supported as the local builder.
+
 ## Quick start
 
 Clone the repository and run the guided installer from its root:
@@ -43,7 +53,7 @@ cd multica-deployment-tool
 python .\install.py
 ```
 
-The wizard checks SSH, discovers common Synology Docker paths, asks for the NAS address, creates application secrets on the NAS, deploys the stack, and verifies `/readyz`. It does not require manual `.env` editing.
+The wizard checks SSH, discovers common Synology Docker paths, asks for the target address, creates application secrets on the target host, deploys the stack, and verifies `/readyz`. It does not require manual `.env` editing.
 
 For routine work, use `python multica_deploy.py wizard` on any platform or `bash multica-tool.sh` on Linux/macOS. Windows `.cmd` and PowerShell wrappers live under `compat/windows/` as optional compatibility entry points.
 
