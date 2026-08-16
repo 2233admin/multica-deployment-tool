@@ -15,20 +15,13 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `deploy.ps1` | 旧 PowerShell 兼容入口；新功能以 Python 入口为准 |
 | `install.py` | 新用户首次安装入口；检查 SSH 后启动向导 |
 | `multica_deploy.py` | 推荐入口；Python 标准库实现部署、状态、日志和验证码命令 |
-| `multica-deploy.cmd` | Windows 双击/命令行启动 Python 入口 |
-| `multica-admin.cmd` | Windows 交互式管理菜单；不需要记参数 |
 | `multica-deploy.sh` | Linux/macOS 命令行启动 Python 入口 |
 | `multica-admin.sh` | Linux/macOS 交互式管理菜单 |
-| `multica-tool.cmd` | Windows 部署工具统一入口 |
 | `multica-tool.sh` | Linux/macOS 部署工具统一入口 |
 | `package.py` | 维护者用标准库生成干净 ZIP 和 SHA256 校验文件 |
-| `status.ps1` | PowerShell 兼容状态检查 |
-| `logs.ps1` | PowerShell 兼容脱敏日志 |
-| `verification-code.ps1` | PowerShell 兼容验证码查看；输出可能是敏感信息 |
-| `client-bootstrap.ps1` | Windows 安装 CLI、绑定自托管地址并启动本机 daemon |
+| `compat/windows/` | 可选 Windows `.cmd` / PowerShell 兼容层；不是核心安装依赖 |
 | `docker-compose.selfhost.yml` | Multica 官方 PostgreSQL、backend、frontend 定义 |
 | `docker-compose.nas.yml` | NAS 专用 Caddy 和固定 Docker 子网 |
 | `Caddyfile` | 同源入口、backend 健康检查和 WebSocket 转发 |
@@ -63,12 +56,12 @@ python3 install.py
 
 安装器会检查 `ssh/scp`，然后进入引导安装：填写 SSH 主机和端口后，它会尽力自动探测远端用户、用户组和 Docker 路径；接着选择 Synology 或普通 Linux，确认 NAS IP 后直接部署。部署完成后会询问登录验证方式：Gitea（内网推荐）、内网 SMTP、内网测试固定验证码、Resend 或稍后配置。常见 Synology 场景只需几次输入；需要改目录、Docker 或用户组时再展开高级参数。不会修改源码，也不要求手工编辑 `.env`。
 
-Windows 双击 `multica-tool.cmd`；Linux/macOS 运行 `bash multica-tool.sh`。菜单里可以部署、查看状态、配置登录验证、配置 GitHub 或查看日志；密码不会写进命令行。
+推荐在任何平台运行 `python multica_deploy.py wizard`；Linux/macOS 也可以运行 `bash multica-tool.sh`。Windows 的 `.cmd` / PowerShell 兼容入口放在 `compat/windows/`，不是核心安装依赖。菜单里可以部署、查看状态、配置登录验证、配置 GitHub 或查看日志；密码不会写进命令行。
 
 第一次在菜单里选择“修改 NAS 连接参数”，填完后会把非敏感连接参数保存到当前用户的配置目录。配置文件不在源码目录，也不会进入开源压缩包；数据库、JWT、SMTP、GitHub 私钥等秘密仍只在 NAS 上保存。
 
 ```powershell
-.\multica-tool.cmd
+python .\multica_deploy.py wizard
 ```
 
 Linux/macOS：
@@ -161,7 +154,7 @@ python .\multica_deploy.py deploy --nas-host YOUR_SSH_HOST --ssh-port 22 --nas-i
 Windows 也可以用同目录的快捷入口：
 
 ```powershell
-.\multica-deploy.cmd status --nas-host YOUR_SSH_HOST --nas-ip YOUR_NAS_IP
+python .\multica_deploy.py status --nas-host YOUR_SSH_HOST --nas-ip YOUR_NAS_IP
 ```
 
 如果是我们自己构建的 Gitea 补丁镜像，除了版本标签，还要指定两个镜像仓库；backend 和 web 必须使用同一套版本：
@@ -175,6 +168,16 @@ python .\multica_deploy.py deploy `
 ```
 
 镜像仓库地址只保存在本地非敏感部署配置和 NAS `.env` 中；不要把 registry 密码写进命令行。私有仓库登录应提前在 NAS 上完成 `docker login`，部署工具只负责拉取和启动。
+
+## Windows 兼容层
+
+核心安装和管理链是 Python，可在 Windows、Linux 和 macOS 使用。`compat/windows/` 下保留 `.cmd` 和 PowerShell 入口，给已经习惯 PowerShell 的管理员或 Windows Agent 使用；它们不是核心安装依赖，也不再维护一套独立的部署逻辑。
+
+Windows Agent 需要绑定本机 daemon 时，可以运行：
+
+```powershell
+.\compat\windows\client-bootstrap.ps1 -ServerUrl http://YOUR_NAS_IP:3010
+```
 
 ## 升级、回滚和 Gitea 变更
 
@@ -220,7 +223,7 @@ Gitea 支持目前是我们维护的 fork 变更，不是上游 Multica 自动�
 
 Linux 这里分三种角色，不要把“管理机”和“运行 agent 的设备”混为一谈：
 
-1. **Linux 管理机控制 Synology NAS**：只需要在 Linux 管理机安装 Python 3.9+、`ssh`、`scp`，把本目录复制过去，然后运行 `bash multica-tool.sh`。Synology 需要在菜单或命令中填写 Container Manager 的 Docker 路径。
+1. **Linux 管理机控制 Synology NAS**：只需要在 Linux 管理机安装 Python 3.9+、`ssh`、`scp`，把本目录复制过去，然后运行 `python3 multica_deploy.py wizard` 或 `bash multica-tool.sh`。Synology 需要在菜单或命令中填写 Container Manager 的 Docker 路径。
 2. **Multica 服务端本身跑在普通 Linux 服务器**：可以把 NAS 主机指向这台 Linux，Docker 命令改成 `docker`，部署目录和用户/组改成 Linux 实际值。当前脚本默认通过免密 `sudo -n` 执行远端命令；如果 SSH 用户已加入 `docker` 组并且目标目录已归该用户所有，可加 `--no-sudo`。
 3. **Linux agent 设备**：这台机器不跑数据库和前端，只安装本机 CLI/daemon 以及 `claude`、`codex`、`omp`、`openclaw` 等工具，然后绑定到 NAS 服务端。
 
@@ -297,7 +300,7 @@ http://YOUR_NAS_IP:3010/auth/callback
 
 注意：Gitea 登录需要使用包含该功能的 Multica backend/web 镜像。已有的旧版 GHCR 镜像不会因为 `.env` 多了几个变量就自动获得登录按钮；从源码验收时，在 Multica 源码目录运行 `make selfhost-build`，或先发布带该功能的新镜像标签，再让 NAS 部署该标签。
 
-也可以在 `multica-tool.cmd` / `multica-tool.sh` 的菜单中选择“配置登录验证”。
+也可以在 `python multica_deploy.py wizard` / `bash multica-tool.sh` 的菜单中选择“配置登录验证”。
 
 如果没有配置 `SMTP_*` 或 `RESEND_*`，验证码只会写入 backend 日志。这不是收件箱故障，是邮件后端尚未启用。首次运行 `install.py` 会主动询问是否现在配置；选择“稍后”也可以先体验系统。
 
@@ -393,7 +396,7 @@ Multica 服务端只负责任务、上下文和结果；每台电脑上的 daemo
 每台新设备都要分别安装并登录工具，然后：
 
 ```powershell
-.\client-bootstrap.ps1
+.\compat\windows\client-bootstrap.ps1
 & "$env:USERPROFILE\.multica\bin\multica.exe" daemon restart
 & "$env:USERPROFILE\.multica\bin\multica.exe" daemon status
 ```
@@ -535,7 +538,7 @@ ssh YOUR_SSH_HOST "cd YOUR_MULTICA_TARGET && sudo -n docker compose --env-file .
 
 ```powershell
 $multicaUrl = "http://YOUR_NAS_IP:3010"
-.\client-bootstrap.ps1 -ServerUrl $multicaUrl
+.\compat\windows\client-bootstrap.ps1 -ServerUrl $multicaUrl
 ```
 
 脚本会调用 Multica 官方安装脚本（下载时执行官方 SHA256 校验）、打开一次浏览器登录回调，然后启动本机 daemon。完成后检查：

@@ -45,7 +45,7 @@ python .\install.py
 
 The wizard checks SSH, discovers common Synology Docker paths, asks for the NAS address, creates application secrets on the NAS, deploys the stack, and verifies `/readyz`. It does not require manual `.env` editing.
 
-For routine work, use `multica-tool.cmd` on Windows or `bash multica-tool.sh` on Linux/macOS.
+For routine work, use `python multica_deploy.py wizard` on any platform or `bash multica-tool.sh` on Linux/macOS. Windows `.cmd` and PowerShell wrappers live under `compat/windows/` as optional compatibility entry points.
 
 ## Daily commands
 
@@ -73,6 +73,10 @@ python .\multica_deploy.py build `
 ```
 
 The tool detects the NAS architecture. Same-architecture builds use the checkout's Compose override; cross-architecture builds use buildx. A registry is optional, not required.
+
+## Windows compatibility layer
+
+The deployment engine is Python-first. The files under `compat/windows/` are convenience wrappers for operators or Windows Agent devices that already use PowerShell; they are not required by the installer or the core CLI.
 
 ## Secrets and network boundary
 

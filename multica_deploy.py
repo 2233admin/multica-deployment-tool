@@ -992,7 +992,7 @@ def guided_install(args: argparse.Namespace) -> None:
     print("\n下一步：")
     print(f"1. 浏览器打开 http://{args.nas_ip}:{args.app_port} 完成注册/登录。")
     print(f"2. Linux agent 运行: bash client-bootstrap.sh http://{args.nas_ip}:{args.app_port}")
-    print(f"3. Windows agent 运行: .\\client-bootstrap.ps1 -ServerUrl http://{args.nas_ip}:{args.app_port}")
+    print(f"3. Windows agent 运行: .\\compat\\windows\\client-bootstrap.ps1 -ServerUrl http://{args.nas_ip}:{args.app_port}")
 
 
 def wizard(args: argparse.Namespace) -> None:
