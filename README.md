@@ -1,32 +1,97 @@
 # Multica Deployment Tool
 
-An independent, zero-dependency installer and maintenance CLI for self-hosted Multica on Synology NAS or ordinary Linux Docker hosts.
+An independent installer and maintenance CLI for running [Multica](https://github.com/multica-ai/multica) inside your network.
 
-The tool keeps Multica deployment separate from `agent-control`, `agent-plugins`, and Gitea. Those systems are optional integrations, not runtime dependencies.
+It is designed for the awkward parts of self-hosting: first-run setup, Synology path discovery, NAS-only secrets, source builds, upgrades, health checks, and safe rollback. It does not merge Multica with `agent-control`, `agent-plugins`, or Gitea; those remain optional integrations.
+
+中文文档：[README.zh-CN.md](README.zh-CN.md)
+
+## What it supports
+
+- Windows, Linux, or macOS as the management machine
+- Synology Container Manager or ordinary Linux Docker hosts
+- Stable image deployment and local Multica source builds
+- Gitea OAuth/OIDC, SMTP/Resend, GitHub App, and optional plugin configuration
+- Read-only diagnostics, redacted logs, upgrade, and release-state rollback
+- No pip package or registry requirement for the source-build transfer loop
+
+## Requirements
+
+For a normal image deployment:
+
+- Python 3.9+
+- OpenSSH client (`ssh` and `scp`)
+- An SSH account on the target with Docker access, either directly or through non-interactive `sudo`
+
+For `build` from a Multica checkout, also install Docker Desktop or a Linux Docker daemon. Cross-architecture builds require Docker buildx.
 
 ## Quick start
 
+Clone the repository and run the guided installer from its root:
+
 ```bash
+git clone https://github.com/2233admin/multica-deployment-tool.git
+cd multica-deployment-tool
 python3 install.py
 ```
 
-Windows:
+On Windows:
 
 ```powershell
+git clone https://github.com/2233admin/multica-deployment-tool.git
+cd multica-deployment-tool
 python .\install.py
 ```
 
-The guided installer checks OpenSSH, discovers common Synology paths, creates NAS-only secrets, deploys the stack, and verifies `/readyz`. For routine work use `multica-tool.cmd` on Windows or `bash multica-tool.sh` on Linux/macOS.
+The wizard checks SSH, discovers common Synology Docker paths, asks for the NAS address, creates application secrets on the NAS, deploys the stack, and verifies `/readyz`. It does not require manual `.env` editing.
 
-See [README.zh-CN.md](README.zh-CN.md) for the complete workflow, Gitea configuration, source builds, upgrades, rollback, and agent integration boundaries.
+For routine work, use `multica-tool.cmd` on Windows or `bash multica-tool.sh` on Linux/macOS.
 
-## Maintainer packaging
+## Daily commands
+
+All commands require the SSH host and the internal address unless you have saved them through the wizard. Replace the placeholders; the repository contains no fixed NAS address.
+
+```bash
+python3 multica_deploy.py doctor --nas-host NAS_SSH_HOST --nas-ip NAS_IP
+python3 multica_deploy.py status --nas-host NAS_SSH_HOST --nas-ip NAS_IP
+python3 multica_deploy.py upgrade --nas-host NAS_SSH_HOST --nas-ip NAS_IP --image-tag v0.4.27
+python3 multica_deploy.py rollback --nas-host NAS_SSH_HOST --nas-ip NAS_IP
+python3 multica_deploy.py logs --nas-host NAS_SSH_HOST --nas-ip NAS_IP --service backend --since 15m
+```
+
+Run `doctor` before a change. `rollback` only uses the previous successful image record and never pretends that a database migration is reversible; restore a database snapshot first when required.
+
+## Build and deploy a modified Multica checkout
+
+When you maintain a Multica fork, one command builds backend/web locally, transfers a temporary image archive over SSH, loads it on the NAS, restarts the stack, and checks `/readyz`:
+
+```powershell
+python .\multica_deploy.py build `
+  --source-dir ..\multica `
+  --nas-host NAS_SSH_HOST --nas-ip NAS_IP `
+  --image-tag dev-20260816
+```
+
+The tool detects the NAS architecture. Same-architecture builds use the checkout's Compose override; cross-architecture builds use buildx. A registry is optional, not required.
+
+## Secrets and network boundary
+
+- JWT, database, SMTP, Gitea, GitHub, and VCS secrets stay in the NAS `.env` or application storage.
+- The management-machine config stores only connection and image settings.
+- The Compose file refuses to start without `JWT_SECRET` and `POSTGRES_PASSWORD`.
+- The default deployment is internal HTTP. Put HTTPS in front of it before exposing anything beyond your trusted network.
+
+## Optional integrations
+
+The adapter under `adapters/agent-plugins-multica/` converts static skills into Multica Private Plugin V1 archives. `agent-control` tools remain on the Agent device and can be exposed through a local CLI or MCP server. Neither repository is a runtime dependency of this tool.
+
+## Maintainer release
 
 ```bash
 python3 package.py
 ```
 
-This creates a clean ZIP and SHA256 file under `dist/` without including operator secrets or local runtime state.
+This creates `dist/multica-deployment-kit.zip` and its SHA256 file without including `.env`, local configuration, logs, or Python cache files.
 
 ## License
 

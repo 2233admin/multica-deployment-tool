@@ -1,10 +1,10 @@
-# Multica NAS 内网部署包
+# Multica 内网部署工具
 
-这份目录是 Multica 自托管实例的可重复部署入口。目标是让下一次升级、换机器或交给别人操作时，不需要重新翻聊天记录，也不需要手工拼一串容易出错的 Docker 命令。
+这是一个独立的 Multica 自托管部署工具。它把首次安装、NAS 路径探测、源码构建、升级、诊断和回滚收进一条可重复的工作流，让换机器或交给别人维护时不需要重新翻聊天记录，也不需要手工拼 Docker 命令。
 
 这个部署入口只负责 Multica 本身，不依赖 Agent 治理仓、Skill 仓或具体 Agent 工具。其它系统通过可选适配器接入，不进入 NAS 部署生命周期。
 
-## 先记住三件事
+## 先记住四件事
 
 - 部署入口是内网 HTTP：地址由你传入的 `--nas-ip` 和 `--app-port` 生成。没有配置 HTTPS，也不要把 3010、3011、3012 端口映射到公网。
 - NAS 上的 `.env` 含 JWT、数据库和 VCS 密钥，只在 NAS 保存，脚本升级时不会覆盖；不要把它复制到聊天、工单或 Git。
@@ -40,23 +40,24 @@
 
 ### 给新用户的最短路径
 
-下载或克隆项目后，进入这个部署目录，运行一次 `install.py`：
+下载或克隆本仓库后，在仓库根目录运行一次 `install.py`：
 
-```text
-deploy/multica-nas/install.py
+```bash
+git clone https://github.com/2233admin/multica-deployment-tool.git
+cd multica-deployment-tool
 ```
 
 Windows：
 
 ```powershell
-cd deploy\multica-nas
+cd multica-deployment-tool
 python .\install.py
 ```
 
 Linux/macOS：
 
 ```bash
-cd deploy/multica-nas
+cd multica-deployment-tool
 python3 install.py
 ```
 
