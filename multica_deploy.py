@@ -34,6 +34,7 @@ DOCKER_PATH = "docker"
 DEFAULTS = {
     "nas_host": "",
     "nas_ip": "",
+    "netbird": False,
     "nas_target": "/opt/multica",
     "source_dir": "",
     "image_tag": "v0.4.26",
@@ -56,6 +57,7 @@ CONFIG_KEYS = (
     "nas_host",
     "ssh_port",
     "nas_ip",
+    "netbird",
     "nas_target",
     "source_dir",
     "docker_path",
@@ -69,6 +71,7 @@ CONFIG_OPTIONS = {
     "nas_host": ("--nas-host",),
     "ssh_port": ("--ssh-port",),
     "nas_ip": ("--nas-ip",),
+    "netbird": ("--netbird", "--no-netbird"),
     "nas_target": ("--nas-target",),
     "source_dir": ("--source-dir",),
     "docker_path": ("--docker-path",),
@@ -129,6 +132,8 @@ def load_config(path: Path) -> dict[str, object]:
         raise ConfigError(f"部署配置字段 ssh_port 必须是整数: {path}")
     if "no_sudo" in result and not isinstance(result["no_sudo"], bool):
         raise ConfigError(f"部署配置字段 no_sudo 必须是布尔值: {path}")
+    if "netbird" in result and not isinstance(result["netbird"], bool):
+        raise ConfigError(f"部署配置字段 netbird 必须是布尔值: {path}")
     return result
 
 
@@ -192,6 +197,8 @@ def validate_config(args: argparse.Namespace, *, require_ip: bool = True) -> Non
             raise ConfigError(f"--nas-ip 不是有效 IP: {args.nas_ip}") from exc
         if address.version != 4:
             raise ConfigError("目前 Caddy 模板只支持 IPv4 --nas-ip。")
+    if getattr(args, "netbird", False) and not args.nas_ip:
+        raise ConfigError("--netbird 需要同时提供 --nas-ip（NAS 的 NetBird IPv4 地址）。")
     if not re.fullmatch(r"/[A-Za-z0-9._/-]+", args.nas_target):
         raise ConfigError("--nas-target 必须是简单的绝对 NAS 路径。")
     docker_value = getattr(args, "docker_path", DOCKER_PATH)
@@ -220,6 +227,57 @@ def validate_config(args: argparse.Namespace, *, require_ip: bool = True) -> Non
         port = getattr(args, name, DEFAULTS[name])
         if port < 1 or port > 65535:
             raise ConfigError(f"--{name.replace('_', '-')} 必须在 1 到 65535 之间。")
+
+
+def verify_netbird_endpoint(args: argparse.Namespace) -> None:
+    """Fail before changing Multica when the selected overlay endpoint is unavailable."""
+
+    if not getattr(args, "netbird", False):
+        return
+    expected = f"NetBird IP: {args.nas_ip}/"
+    docker = privileged(args, q(docker_path(args)))
+    command = textwrap.dedent(
+        f"""
+        netbird_status() {{
+          if command -v netbird >/dev/null 2>&1; then
+            netbird status
+            return
+          fi
+          if {docker} inspect netbird >/dev/null 2>&1; then
+            {docker} exec netbird netbird status
+            return
+          fi
+          return 127
+        }}
+        status="$(netbird_status)" || {{
+          echo 'NetBird 未运行：请先在 NAS 启动并加入 NetBird，再部署。' >&2
+          exit 1
+        }}
+        printf '%s\\n' "$status" | grep -Fq 'Management: Connected' || {{
+          echo 'NetBird 管理连接未建立。' >&2
+          exit 1
+        }}
+        printf '%s\\n' "$status" | grep -Fq 'Signal: Connected' || {{
+          echo 'NetBird 信令连接未建立。' >&2
+          exit 1
+        }}
+        printf '%s\\n' "$status" | grep -Fq {q(expected)} || {{
+          echo 'NAS 当前 NetBird IP 与 --nas-ip 不一致。' >&2
+          exit 1
+        }}
+        """
+    ).strip()
+    remote(args, command)
+    print(f"NetBird 已验证: http://{args.nas_ip}:{args.app_port}")
+
+
+def open_service_url(args: argparse.Namespace, path: str, *, timeout: int = 5):
+    """Open the selected service endpoint without leaking NetBird traffic to a proxy."""
+
+    url = f"http://{args.nas_ip}:{args.app_port}{path}"
+    if getattr(args, "netbird", False):
+        return urllib.request.build_opener(urllib.request.ProxyHandler({})).open(url, timeout=timeout)
+    return urllib.request.urlopen(url, timeout=timeout)
 
 
 def ssh_base(args: argparse.Namespace) -> list[str]:
@@ -432,6 +490,7 @@ def render_caddy(args: argparse.Namespace) -> Path:
     )
     if count != 1:
         raise ConfigError("Caddyfile 没有找到可渲染的 HTTP 监听地址。")
+    rendered = rendered.replace("NAS_IP", args.nas_ip)
     handle = tempfile.NamedTemporaryFile(
         mode="w", encoding="utf-8", suffix=".Caddyfile", prefix="multica-", delete=False
     )
@@ -635,6 +694,7 @@ def configure_email(args: argparse.Namespace, *, production_mode: bool = False) 
 def configure_gitea_auth(args: argparse.Namespace) -> None:
     """Configure the self-hosted Gitea OAuth2/OIDC login provider."""
 
+    verify_netbird_endpoint(args)
     issuer = prompt_required("Gitea 地址（例如 http://gitea.internal:3000）").rstrip("/")
     parsed = urllib.parse.urlparse(issuer)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.query or parsed.fragment:
@@ -1347,6 +1407,7 @@ def doctor(args: argparse.Namespace) -> None:
         check_binary(binary)
     check_package()
     auto_detect_remote_docker(args)
+    verify_netbird_endpoint(args)
     print("本地依赖: ssh/scp 已找到")
     command = " && ".join(
         [
@@ -1367,9 +1428,7 @@ def doctor(args: argparse.Namespace) -> None:
     output = remote_capture(args, command)
     print(output, end="")
     try:
-        with urllib.request.urlopen(
-            f"http://{args.nas_ip}:{args.app_port}/readyz", timeout=5
-        ) as response:
+        with open_service_url(args, "/readyz") as response:
             print(f"readyz={response.status}")
     except (urllib.error.URLError, TimeoutError) as exc:
         print(f"readyz=unreachable ({exc})", file=sys.stderr)
@@ -1417,6 +1476,7 @@ def deploy(args: argparse.Namespace) -> None:
     check_binary("scp")
     check_package()
     auto_detect_remote_docker(args)
+    verify_netbird_endpoint(args)
     # Direct CLI deployments should be just as reusable as the guided wizard:
     # persist only the resolved, non-secret connection settings for later
     # status/logs/upgrade commands.
@@ -1503,6 +1563,7 @@ def status(args: argparse.Namespace) -> None:
     check_binary("ssh")
     check_package()
     auto_detect_remote_docker(args)
+    verify_netbird_endpoint(args)
     print(f"地址: http://{args.nas_ip}:{args.app_port}")
     print("\n容器:")
     remote(args, f"{compose(args)} ps")
@@ -1553,7 +1614,20 @@ def add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--config-file", default=str(default_config_path()), help="本地非敏感部署配置文件")
     parser.add_argument("--nas-host", default=DEFAULTS["nas_host"], help="SSH 主机、IP 或别名")
     parser.add_argument("--ssh-port", type=int, default=0, help="SSH 端口；0 表示使用 SSH 配置")
-    parser.add_argument("--nas-ip", default=DEFAULTS["nas_ip"], help="内网访问 IP")
+    parser.add_argument("--nas-ip", default=DEFAULTS["nas_ip"], help="服务入口 IPv4 地址")
+    overlay_group = parser.add_mutually_exclusive_group()
+    overlay_group.add_argument(
+        "--netbird",
+        action="store_true",
+        default=DEFAULTS["netbird"],
+        help="把 --nas-ip 作为 NAS NetBird 地址；部署前校验 NetBird 已连接，且 Caddy 只绑定该地址",
+    )
+    overlay_group.add_argument(
+        "--no-netbird",
+        dest="netbird",
+        action="store_false",
+        help="不使用 NetBird 模式；覆盖已保存的 --netbird 设置",
+    )
     parser.add_argument("--nas-target", default=DEFAULTS["nas_target"], help="远端部署目录（历史参数名保留 nas）")
     parser.add_argument(
         "--docker-path",
