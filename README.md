@@ -219,6 +219,26 @@ You do not need to assemble Compose commands by hand or hard-code a particular N
 
 Multica is the service being deployed. Plane is an optional task control plane and may run on the same host or on another existing service. Gitea OAuth, GitHub App integration, and email verification are optional. NetBird is an optional network path, not a deployment dependency.
 
+### Gitea OAuth backend reachability
+
+If the browser reaches Gitea and returns to Multica, but login never completes, the backend is
+usually the client that can't reach `GITEA_ISSUER_URL` — a public Gitea hostname is often only
+reachable from the browser's network, not from the deployment target (and, separately, not
+necessarily from inside the backend's own Docker network even when the target host itself can
+reach it). Backend logs show `Gitea OAuth token exchange failed` with a ~15s timeout. Run the
+`gitea` wizard again and fill in the optional "target-to-Gitea host:ip mapping" prompt
+(`GITEA_BACKEND_HOST_OVERRIDE`) with an address the deployment target — specifically, a shell
+inside the backend container — can actually reach; it only changes what the backend resolves that
+hostname to, so TLS and the browser-facing URL are unaffected. Leave it empty for single-address
+deployments; the wizard already recreates the backend container for you.
+
+`gitea`, `deploy`/`upgrade`, `status`, and `doctor` now verify this automatically instead of
+requiring a manual SSH session: a throwaway container on the deployment target's own Docker
+network probes the token-exchange address directly (honoring `GITEA_BACKEND_HOST_OVERRIDE`).
+`gitea` and `deploy`/`upgrade` treat an unreachable back-channel as a hard failure and stop before
+printing success; `status` fails the same way it already does for `/readyz`; `doctor` only reports
+`gitea_backchannel=...` without failing, since it never changes the target.
+
 ## Quick start
 
 Requirements:

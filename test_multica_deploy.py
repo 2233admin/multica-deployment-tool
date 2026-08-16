@@ -581,7 +581,10 @@ class DeploymentToolTests(unittest.TestCase):
         self.assertIn("github_device_flow_token_encryption_key=configured", output)
         self.assertIn("github_webhook=not-configured (LAN/NetBird is okay)", output)
         self.assertNotIn("test-secret", output)
-        command = remote.call_args.args[1]
+        # doctor() also calls remote_capture() once more, from
+        # gitea_backchannel_status(), after the main diagnostic command; assert
+        # against that first call rather than the (now different) last one.
+        command = remote.call_args_list[0].args[1]
         self.assertIn("github_device_flow_app_client_id=configured", command)
         self.assertIn("github_device_flow_token_encryption_key=configured", command)
         self.assertNotIn("test-secret", command)
@@ -627,6 +630,83 @@ class DeploymentToolTests(unittest.TestCase):
         self.assertIn("GITHUB_DEVICE_FLOW_ENABLED=false", template)
         self.assertNotIn("GITHUB_APP_CLIENT_ID=Iv1.", template)
         self.assertIn("LAN/NetBird", template)
+
+    def test_compose_has_inert_default_for_gitea_backend_host_override(self):
+        compose = (multica_deploy.PACKAGE_ROOT / "docker-compose.selfhost.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            '${GITEA_BACKEND_HOST_OVERRIDE:-unused.invalid:127.0.0.1}', compose
+        )
+
+    def test_env_template_documents_gitea_backend_host_override(self):
+        template = (multica_deploy.PACKAGE_ROOT / ".env.template").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("GITEA_BACKEND_HOST_OVERRIDE=", template)
+
+    def test_gitea_backend_host_override_accepts_host_ip_pairs(self):
+        multica_deploy.validate_gitea_backend_host_override("git.example.com:192.168.1.10")
+
+    def test_gitea_backend_host_override_rejects_malformed_values(self):
+        for bad in ("git.example.com", "git.example.com:", ":192.168.1.10", "git.example.com:not-an-ip"):
+            with self.assertRaises(multica_deploy.ConfigError):
+                multica_deploy.validate_gitea_backend_host_override(bad)
+
+    def test_gitea_backchannel_not_configured_when_gitea_unset(self):
+        args = argparse.Namespace(nas_target="/volume1/docker/multica")
+        with patch.object(multica_deploy, "remote_capture", return_value="") as capture:
+            status, detail = multica_deploy.gitea_backchannel_status(args)
+        self.assertEqual((status, detail), ("not_configured", ""))
+        capture.assert_called_once()
+
+    def test_gitea_backchannel_reachable_uses_resolve_override(self):
+        args = argparse.Namespace(
+            nas_target="/volume1/docker/multica", docker_path="docker", no_sudo=False
+        )
+        env_output = (
+            "GITEA_ISSUER_URL=http://git.xart.top:8418\n"
+            "GITEA_CLIENT_ID=abc123\n"
+            "GITEA_BACKEND_HOST_OVERRIDE=git.xart.top:10.253.0.1\n"
+        )
+        with patch.object(
+            multica_deploy, "remote_capture", side_effect=[env_output, "200"]
+        ) as capture:
+            status, detail = multica_deploy.gitea_backchannel_status(args)
+        self.assertEqual((status, detail), ("reachable", "200"))
+        probe_command = capture.call_args_list[1].args[1]
+        self.assertIn(f"--network {multica_deploy.COMPOSE_NETWORK_NAME}", probe_command)
+        self.assertIn(multica_deploy.GITEA_BACKCHANNEL_PROBE_IMAGE, probe_command)
+        self.assertIn("--resolve", probe_command)
+        self.assertIn("git.xart.top:8418:10.253.0.1", probe_command)
+
+    def test_gitea_backchannel_skips_resolve_without_override(self):
+        args = argparse.Namespace(
+            nas_target="/volume1/docker/multica", docker_path="docker", no_sudo=False
+        )
+        env_output = "GITEA_ISSUER_URL=https://gitea.internal\nGITEA_CLIENT_ID=abc123\n"
+        with patch.object(
+            multica_deploy, "remote_capture", side_effect=[env_output, "200"]
+        ) as capture:
+            status, detail = multica_deploy.gitea_backchannel_status(args)
+        self.assertEqual(status, "reachable")
+        probe_command = capture.call_args_list[1].args[1]
+        self.assertNotIn("--resolve", probe_command)
+        self.assertIn("https://gitea.internal:443/", probe_command)
+
+    def test_gitea_backchannel_unreachable_when_probe_fails(self):
+        args = argparse.Namespace(
+            nas_target="/volume1/docker/multica", docker_path="docker", no_sudo=False
+        )
+        env_output = "GITEA_ISSUER_URL=http://git.xart.top:8418\nGITEA_CLIENT_ID=abc123\n"
+        with patch.object(
+            multica_deploy,
+            "remote_capture",
+            side_effect=[env_output, RuntimeError("NAS 命令失败（退出码 28）。")],
+        ):
+            status, detail = multica_deploy.gitea_backchannel_status(args)
+        self.assertEqual(status, "unreachable")
+        self.assertIn("28", detail)
 
     def test_synology_defaults_are_detected(self):
         args = argparse.Namespace(

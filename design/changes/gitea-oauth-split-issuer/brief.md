@@ -69,3 +69,29 @@ will break certificate verification unless the certificate covers that IP.
   afterwards, and that the container must be recreated rather than restarted for a changed
   environment value to take effect.
 - Any change to the browser-facing URL scheme.
+
+## Resolution (2026-08-17)
+
+Shipped as the host-mapping fallback (option 2 in "Proposed change"), not a second issuer URL —
+this repository doesn't build or carry the `gitea-oauth-native` backend fork, so it can't add a
+variable the Go binary would need to read. `GITEA_BACKEND_HOST_OVERRIDE` is applied purely as a
+Docker `extra_hosts` entry on the `backend` service; `GITEA_ISSUER_URL` never changes.
+
+On the NAS this was diagnosed against, the failure had *two* layers, not one:
+
+1. The address split this brief describes: `git.xart.top` is not reachable from the deployment
+   target over its normal route.
+2. A second, narrower gap discovered while fixing it: even the LAN-facing address
+   (`192.168.50.130:8418`, a DSM Reverse Proxy `nginx` process bound to `0.0.0.0:8418`) was
+   reachable from the NAS host itself but **not from inside the backend container** — while the
+   container had normal internet egress and could reach other host-bound ports fine. The working
+   address turned out to be the Docker bridge gateway for the `multica_default` network
+   (`10.253.0.1`, from `docker-compose.nas.yml`'s pinned `10.253.0.0/24` subnet), since the
+   reverse proxy listens on every interface including that one. The exact kernel-level reason the
+   bonded LAN interface specifically doesn't hairpin from a container was not root-caused (candidate:
+   `rp_filter` on `ovs_bond0`, or Synology VMM's OVS bridging bypassing the host netfilter path
+   entirely) — out of scope to chase further once a reliable working address was confirmed.
+
+Net effect: `GITEA_BACKEND_HOST_OVERRIDE` is deployment-topology-specific by design (operators
+fill in whatever address their target can actually reach — LAN IP, overlay IP, or a bridge
+gateway); it is not assumed to be Gitea's "real" LAN address.

@@ -97,6 +97,27 @@ python .\install.py
 
 请把部署完成报告中的完整 URL 原样复制到 Gitea 应用。协议、主机、端口和路径都必须一致。使用 NetBird 或域名时，确认浏览器和 Gitea 都能访问该 origin。
 
+### Gitea 回程可达性
+
+**如果浏览器能跳转到 Gitea、但登录卡住不动**：这通常是 backend 换 token 那一步连不上
+`GITEA_ISSUER_URL` 里的地址——浏览器和部署目标(NAS/服务器)到 Gitea 之间走的是两条不同的
+网络路径，公网域名往往只在浏览器那一侧可达。backend 日志里能看到
+`Gitea OAuth token exchange failed` / `status=502` / `duration=15s`。排查时先在部署目标上
+确认这个地址到底通不通，包括从 backend 容器内部测试(不只是从宿主机测试——两者的可达性
+可能不同，尤其是当 Gitea 由反向代理暴露、且反代只监听某个特定网卡时)。确认部署目标另有
+一个可达地址后，向导会问一个可选的“部署目标直连 Gitea 的「域名:IP」映射”（对应
+`GITEA_BACKEND_HOST_OVERRIDE`），只让部署目标把这个域名解析到它自己能连通的地址，浏览器
+侧地址、证书都不需要变。这一项和其它 Gitea 配置一样，通过向导写入后会自动重建 backend
+容器（修改 `.env` 里的环境变量必须重建容器才生效，单纯 `docker restart` 不会重新读取）；
+留空表示不需要，单一地址就能访问的部署行为不受影响。
+
+从这次修复开始，`gitea`、`deploy`/`upgrade`、`status` 和 `doctor` 会自动做这项验证，不再需要
+手工 SSH 进容器执行 `nc`/`curl --resolve`：在部署目标自己的 Docker 网络里起一个一次性容器，
+直接探测换 token 用的地址是否可达（尊重 `GITEA_BACKEND_HOST_OVERRIDE`）。`gitea` 和
+`deploy`/`upgrade` 遇到不可达会直接报错并停在那一步，不会打印“已写入 NAS”或“部署完成”；
+`status` 把这项和 `/readyz` 一样当作强检查，不可达时命令本身也会以非零状态退出；`doctor`
+是只读诊断，探测结果只打印 `gitea_backchannel=...`，不会让命令失败。
+
 ## 一体化 onboarding 主流程
 
 一次安装按以下顺序完成：
