@@ -62,6 +62,16 @@ services:
       - "127.0.0.1:${BACKEND_PORT:-${API_PORT:-${SERVER_PORT:-${PORT:-8080}}}}:8080"
     volumes:
       - backend_uploads:/app/data/uploads
+    extra_hosts:
+      # Optional: make the backend resolve the Gitea OAuth issuer hostname to an
+      # address it can actually reach, when that differs from the browser-facing
+      # address in GITEA_ISSUER_URL (public domain unreachable from the deployment
+      # target, or a reverse proxy only reachable on an interface this container's
+      # Docker network can't route to). Set via GITEA_BACKEND_HOST_OVERRIDE as
+      # "issuer-hostname:reachable-ip". TLS still validates normally: only the
+      # resolved IP changes, not the hostname used for the handshake. The
+      # placeholder below is inert when the override is unset.
+      - "${GITEA_BACKEND_HOST_OVERRIDE:-unused.invalid:127.0.0.1}"
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-multica}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/${POSTGRES_DB:-multica}?sslmode=disable
       PORT: "8080"

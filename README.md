@@ -48,6 +48,26 @@ python3 multica_deploy.py deploy \
 
 Every desktop or remote device must join the same NetBird network and be allowed to reach TCP 3010 on the target. Use the NetBird address as the Multica server URL and exclude the NetBird range from any local HTTP proxy. Use `--no-netbird` to override a saved NetBird setting when intentionally switching back to a normal private-LAN deployment.
 
+### Gitea OAuth backend reachability
+
+If the browser reaches Gitea and returns to Multica, but login never completes, the backend is
+usually the client that can't reach `GITEA_ISSUER_URL` — a public Gitea hostname is often only
+reachable from the browser's network, not from the deployment target (and, separately, not
+necessarily from inside the backend's own Docker network even when the target host itself can
+reach it). Backend logs show `Gitea OAuth token exchange failed` with a ~15s timeout. Run the
+`gitea` wizard again and fill in the optional "target-to-Gitea host:ip mapping" prompt
+(`GITEA_BACKEND_HOST_OVERRIDE`) with an address the deployment target — specifically, a shell
+inside the backend container — can actually reach; it only changes what the backend resolves that
+hostname to, so TLS and the browser-facing URL are unaffected. Leave it empty for single-address
+deployments; the wizard already recreates the backend container for you.
+
+`gitea`, `deploy`/`upgrade`, `status`, and `doctor` now verify this automatically instead of
+requiring a manual SSH session: a throwaway container on the deployment target's own Docker
+network probes the token-exchange address directly (honoring `GITEA_BACKEND_HOST_OVERRIDE`).
+`gitea` and `deploy`/`upgrade` treat an unreachable back-channel as a hard failure and stop before
+printing success; `status` fails the same way it already does for `/readyz`; `doctor` only reports
+`gitea_backchannel=...` without failing, since it never changes the target.
+
 ## Quick start
 
 Clone the repository and run the guided installer from its root:
