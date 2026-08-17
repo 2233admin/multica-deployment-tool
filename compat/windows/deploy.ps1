@@ -11,8 +11,9 @@ param(
     [string]$NasTarget = "/opt/multica",
     [ValidatePattern("^v\d+\.\d+\.\d+$")]
     [string]$ImageTag = "v0.4.26",
+    [Parameter(Mandatory = $true)]
     [ValidateRange(1, 65535)]
-    [int]$AppPort = 3010,
+    [int]$AppPort,
     [ValidateRange(1, 65535)]
     [int]$BackendPort = 3011,
     [ValidateRange(1, 65535)]

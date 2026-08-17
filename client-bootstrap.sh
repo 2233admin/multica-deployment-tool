@@ -1,10 +1,89 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SERVER_URL="${1:?Usage: bash client-bootstrap.sh http://YOUR_NAS_IP:3010}"
-SERVER_URL="${SERVER_URL%/}"
+usage() {
+  cat <<'EOF'
+Usage: bash client-bootstrap.sh --server-url http://YOUR_BROWSER_HOST:YOUR_APP_PORT [options]
 
-if ! command -v multica >/dev/null 2>&1; then
+Options:
+  --app-url URL          Browser/app URL when it differs from the API URL
+  --profile NAME         Isolated Multica profile for this fleet
+  --workspace-id ID      Verify/switch the workspace used by this daemon
+  --device-name NAME     Stable name shown for this fleet device
+  --runtime-name NAME    Name shown for the runtime registered by this daemon
+  --skip-install         Do not install the official Multica CLI
+  --verify-only          Only verify auth and daemon state; do not open login
+  -h, --help             Show this help
+EOF
+}
+
+SERVER_URL=""
+APP_URL=""
+PROFILE=""
+WORKSPACE_ID=""
+DEVICE_NAME=""
+RUNTIME_NAME=""
+SKIP_INSTALL=false
+VERIFY_ONLY=false
+
+while (($#)); do
+  case "$1" in
+    --server-url) SERVER_URL="${2:?--server-url requires a URL}"; shift 2 ;;
+    --app-url) APP_URL="${2:?--app-url requires a URL}"; shift 2 ;;
+    --profile) PROFILE="${2:?--profile requires a name}"; shift 2 ;;
+    --workspace-id) WORKSPACE_ID="${2:?--workspace-id requires an id or slug}"; shift 2 ;;
+    --device-name) DEVICE_NAME="${2:?--device-name requires a name}"; shift 2 ;;
+    --runtime-name) RUNTIME_NAME="${2:?--runtime-name requires a name}"; shift 2 ;;
+    --skip-install) SKIP_INSTALL=true; shift ;;
+    --verify-only) VERIFY_ONLY=true; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *)
+      if [[ -z "$SERVER_URL" && "$1" != -* ]]; then
+        SERVER_URL="$1"
+        shift
+      else
+        echo "Unknown option: $1" >&2
+        usage >&2
+        exit 2
+      fi
+      ;;
+  esac
+done
+
+if [[ -z "$SERVER_URL" ]]; then
+  usage >&2
+  exit 2
+fi
+SERVER_URL="${SERVER_URL%/}"
+APP_URL="${APP_URL:-$SERVER_URL}"
+
+case "$SERVER_URL" in
+  http://*|https://*) ;;
+  *) echo "--server-url 必须是 http(s) URL。" >&2; exit 2 ;;
+esac
+
+if command -v curl >/dev/null 2>&1; then
+  echo "Checking Multica server at $SERVER_URL ..."
+  curl --fail --silent --show-error --max-time 10 "$SERVER_URL/health" >/dev/null
+fi
+
+find_multica() {
+  if command -v multica >/dev/null 2>&1; then
+    command -v multica
+    return 0
+  fi
+  if [[ -x "$HOME/.multica/bin/multica" ]]; then
+    printf '%s\n' "$HOME/.multica/bin/multica"
+    return 0
+  fi
+  return 1
+}
+
+if ! CLI_PATH="$(find_multica)"; then
+  if $SKIP_INSTALL; then
+    echo "找不到 Multica CLI；去掉 --skip-install，让脚本调用官方安装脚本。" >&2
+    exit 1
+  fi
   if ! command -v curl >/dev/null 2>&1; then
     echo "curl is required to install the Multica CLI." >&2
     exit 1
@@ -14,11 +93,34 @@ if ! command -v multica >/dev/null 2>&1; then
   curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh | bash
 fi
 
-if ! command -v multica >/dev/null 2>&1; then
-  echo "Multica CLI is not on PATH. Open a new shell and run this script again." >&2
+if ! CLI_PATH="$(find_multica)"; then
+  echo "安装脚本结束后仍找不到 Multica CLI。请重新打开 shell 后重试。" >&2
   exit 1
 fi
 
-echo "Configuring self-hosted Multica at $SERVER_URL ..."
-multica setup self-host --server-url "$SERVER_URL" --app-url "$SERVER_URL"
-multica daemon status
+PROFILE_ARGS=()
+if [[ -n "$PROFILE" ]]; then
+  PROFILE_ARGS=(--profile "$PROFILE")
+fi
+
+if $VERIFY_ONLY; then
+  echo "Verifying existing Multica client ..."
+else
+  echo "Configuring self-hosted Multica at $SERVER_URL ..."
+  [[ -n "$DEVICE_NAME" ]] && export MULTICA_DAEMON_DEVICE_NAME="$DEVICE_NAME"
+  [[ -n "$RUNTIME_NAME" ]] && export MULTICA_AGENT_RUNTIME_NAME="$RUNTIME_NAME"
+  "$CLI_PATH" setup self-host "${PROFILE_ARGS[@]}" --server-url "$SERVER_URL" --app-url "$APP_URL"
+  if [[ -n "$WORKSPACE_ID" ]]; then
+    "$CLI_PATH" workspace switch "$WORKSPACE_ID" "${PROFILE_ARGS[@]}"
+  fi
+fi
+
+echo "Authentication status:"
+"$CLI_PATH" auth status "${PROFILE_ARGS[@]}"
+if [[ -n "$WORKSPACE_ID" ]]; then
+  echo "Workspace binding:"
+  "$CLI_PATH" workspace get "$WORKSPACE_ID" "${PROFILE_ARGS[@]}" --output json
+fi
+echo "Daemon status (JSON):"
+"$CLI_PATH" daemon status "${PROFILE_ARGS[@]}" --output json
+echo "Client is connected. Use '$CLI_PATH daemon logs' when a task does not arrive."

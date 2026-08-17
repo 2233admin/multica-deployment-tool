@@ -7,8 +7,9 @@ param(
     [ValidatePattern("^(?:\d{1,3}\.){3}\d{1,3}$")]
     [Parameter(Mandatory = $true)]
     [string]$NasIp,
+    [Parameter(Mandatory = $true)]
     [ValidateRange(1, 65535)]
-    [int]$AppPort = 3010,
+    [int]$AppPort,
     [ValidatePattern("^/[A-Za-z0-9._/-]+$")]
     [string]$NasTarget = "/opt/multica",
     [string]$DockerPath = "docker"
@@ -24,7 +25,7 @@ if (-not (Get-Command ssh -ErrorAction SilentlyContinue)) {
     throw "找不到 ssh。"
 }
 
-Write-Host "Multica NAS 状态" -ForegroundColor Cyan
+Write-Host "Multica 本地版状态" -ForegroundColor Cyan
 Write-Host "地址: http://$NasIp`:$AppPort"
 Write-Host "`n容器:" -ForegroundColor Cyan
 & ssh @sshOptions $NasHost "$compose ps"

@@ -1,10 +1,10 @@
 ---
-name: Multica Deployment Tool visual language
+name: Multica 本地版一键部署包 visual language
 ---
 
 ## Product Context
 
-Multica Deployment Tool is a command-line-first, self-hosted deployment utility used by operators who need a calm, trustworthy way to bring a private AI workspace online across a LAN or NetBird overlay.
+Multica 本地版一键部署包 is a command-line-first installer and maintenance kit for bringing a private Multica server online across a LAN or NetBird overlay.
 
 ## Overview
 

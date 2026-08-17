@@ -1,6 +1,6 @@
 ---
 schema: design-pipeline.motion-foundation.v0.1
-name: Multica Deployment Tool motion language
+name: Multica 本地版一键部署包 motion language
 posture: minimal
 primitiveRegistry: design-pipeline.motion-primitives.v1
 ---

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cross-platform first-run entry point for the Multica deployment tool."""
+"""Cross-platform first-run entry point for the Multica local deployment kit."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
-    print("Multica 部署工具：首次运行请在菜单中填写目标 NAS 参数。")
+    print("Multica 本地版一键部署包：首次运行请填写目标 NAS/服务器、访问地址、端口和登录入口。")
     return multica_deploy.main(["wizard", "--guided", *sys.argv[1:]])
 
 

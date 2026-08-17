@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a clean, reproducible ZIP distribution of this deployment tool."""
+"""Build a clean, reproducible ZIP distribution of the Multica local deployment kit."""
 
 from __future__ import annotations
 
@@ -10,15 +10,28 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 
 ROOT = Path(__file__).resolve().parent
+# Keep the v1 fleet contract and both operator-facing READMEs in every release;
+# the contract is part of the packaged interface, not repository-only prose.
 FILES = (
+    ("CONTEXT.md", "CONTEXT.md"),
+    ("README.md", "README.md"),
     (".env.template", ".env.template"),
+    ("LICENSE", "LICENSE"),
     ("Caddyfile", "Caddyfile"),
     ("compat/windows/client-bootstrap.ps1", "compat/windows/client-bootstrap.ps1"),
     ("client-bootstrap.sh", "client-bootstrap.sh"),
     ("compat/windows/deploy.ps1", "compat/windows/deploy.ps1"),
     ("docker-compose.nas.yml", "docker-compose.nas.yml"),
     ("docker-compose.selfhost.yml", "docker-compose.selfhost.yml"),
+    ("ops/multica-watchdog.sh", "ops/multica-watchdog.sh"),
+    ("ops/S99multica-watchdog.sh", "ops/S99multica-watchdog.sh"),
+    ("ops/multica-watchdog.conf.template", "ops/multica-watchdog.conf.template"),
     ("install.py", "install.py"),
+    ("fleet_plan.py", "fleet_plan.py"),
+    ("fleet_apply.py", "fleet_apply.py"),
+    ("agx_multica_connector.py", "agx_multica_connector.py"),
+    ("fleet_verify.py", "fleet_verify.py"),
+    ("fleet_multi.py", "fleet_multi.py"),
     ("compat/windows/logs.ps1", "compat/windows/logs.ps1"),
     ("multica_deploy.py", "multica_deploy.py"),
     ("compat/windows/multica-admin.cmd", "compat/windows/multica-admin.cmd"),
@@ -29,10 +42,20 @@ FILES = (
     ("multica-tool.sh", "multica-tool.sh"),
     ("package.py", "package.py"),
     ("README.zh-CN.md", "README.zh-CN.md"),
+    ("docs/adr/0001-fleet-boundaries.md", "docs/adr/0001-fleet-boundaries.md"),
+    ("docs/fleet-contract-v1.md", "docs/fleet-contract-v1.md"),
+    ("docs/spec/fleet-deployment-v1.md", "docs/spec/fleet-deployment-v1.md"),
+    ("docs/desktop-pairing-v1.md", "docs/desktop-pairing-v1.md"),
+    ("docs/spec/issue-3-portable-deployment.md", "docs/spec/issue-3-portable-deployment.md"),
     ("assets/mascot/multica-sentinel.gif", "assets/mascot/multica-sentinel.gif"),
     ("assets/mascot/multica-sentinel-still.png", "assets/mascot/multica-sentinel-still.png"),
     ("compat/windows/status.ps1", "compat/windows/status.ps1"),
     ("test_multica_deploy.py", "test_multica_deploy.py"),
+    ("test_fleet_plan.py", "test_fleet_plan.py"),
+    ("test_fleet_apply.py", "test_fleet_apply.py"),
+    ("test_agx_multica_connector.py", "test_agx_multica_connector.py"),
+    ("test_fleet_verify.py", "test_fleet_verify.py"),
+    ("test_fleet_multi.py", "test_fleet_multi.py"),
     ("compat/windows/verification-code.ps1", "compat/windows/verification-code.ps1"),
     ("adapters/agent-plugins-multica/agent_plugins_to_multica.py", "adapters/agent-plugins-multica/agent_plugins_to_multica.py"),
     ("adapters/agent-plugins-multica/AGENT-PLUGINS-BUNDLE-README.md", "adapters/agent-plugins-multica/AGENT-PLUGINS-BUNDLE-README.md"),
@@ -64,7 +87,7 @@ def build_archive(output: Path) -> tuple[Path, str]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="构建 Multica Deployment Tool ZIP")
+    parser = argparse.ArgumentParser(description="构建 Multica 本地版一键部署包 ZIP")
     parser.add_argument(
         "--output",
         default=str(ROOT / "dist" / "multica-deployment-kit.zip"),

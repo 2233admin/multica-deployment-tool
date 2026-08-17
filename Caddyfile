@@ -3,13 +3,23 @@
   auto_https off
 }
 
-http://NAS_IP:3010 {
+http://__BROWSER_HOST__:__APP_PORT__ {
   # Keep the proxy off every other NAS interface. This makes the generated
   # endpoint usable only on the selected private overlay address.
-  bind NAS_IP
+  bind __BIND_ADDRESS__
+
+  # Self-hosted installs are an operational console, not the public marketing
+  # site. Send the root entry point straight to the local sign-in flow.
+  @local_root path /
+  redir @local_root /login 302
 
   @backend_health path /health /readyz
   handle @backend_health {
+    reverse_proxy 127.0.0.1:3011
+  }
+
+  @multica_api path /api/*
+  handle @multica_api {
     reverse_proxy 127.0.0.1:3011
   }
 

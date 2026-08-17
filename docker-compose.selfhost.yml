@@ -54,7 +54,7 @@ services:
       retries: 5
 
   backend:
-    image: ${MULTICA_BACKEND_IMAGE:-ghcr.io/multica-ai/multica-backend}:${MULTICA_IMAGE_TAG:-latest}
+    image: ${MULTICA_BACKEND_REF:-${MULTICA_BACKEND_IMAGE:-ghcr.io/multica-ai/multica-backend}:${MULTICA_IMAGE_TAG:-latest}}
     depends_on:
       postgres:
         condition: service_healthy
@@ -86,6 +86,10 @@ services:
       GITEA_CLIENT_ID: ${GITEA_CLIENT_ID:-}
       GITEA_CLIENT_SECRET: ${GITEA_CLIENT_SECRET:-}
       GITEA_REDIRECT_URI: ${GITEA_REDIRECT_URI:-http://localhost:3000/auth/callback}
+      GITEA_BACKEND_HOST_OVERRIDE: ${GITEA_BACKEND_HOST_OVERRIDE:-}
+      GITHUB_DEVICE_FLOW_ENABLED: ${GITHUB_DEVICE_FLOW_ENABLED:-false}
+      GITHUB_APP_CLIENT_ID: ${GITHUB_APP_CLIENT_ID:-}
+      GITHUB_TOKEN_ENCRYPTION_KEY: ${GITHUB_TOKEN_ENCRYPTION_KEY:-}
       S3_BUCKET: ${S3_BUCKET:-}
       S3_REGION: ${S3_REGION:-us-west-2}
       AWS_ENDPOINT_URL: ${AWS_ENDPOINT_URL:-}
@@ -101,6 +105,8 @@ services:
       APP_ENV: ${APP_ENV:-production}
       MULTICA_DEV_VERIFICATION_CODE: ${MULTICA_DEV_VERIFICATION_CODE:-}
       MULTICA_APP_URL: ${MULTICA_APP_URL:-http://localhost:3000}
+      MULTICA_SERVICE_URL: ${MULTICA_SERVICE_URL:-}
+      MULTICA_PLANE_URL: ${MULTICA_PLANE_URL:-}
       MULTICA_SHUTDOWN_HOLD_DURATION: ${MULTICA_SHUTDOWN_HOLD_DURATION:-}
       ALLOW_SIGNUP: ${ALLOW_SIGNUP:-true}
       ALLOWED_EMAILS: ${ALLOWED_EMAILS:-}
@@ -112,6 +118,8 @@ services:
       FF_PRIVATE_PLUGINS_V1: ${FF_PRIVATE_PLUGINS_V1:-}
       GITHUB_APP_SLUG: ${GITHUB_APP_SLUG:-}
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
+      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
       # Public URL the API is reachable at from the open internet, no
       # trailing slash. Used to mint absolute webhook URLs for autopilot
       # webhook triggers. Leave unset behind a same-origin reverse proxy
@@ -170,7 +178,7 @@ services:
     restart: unless-stopped
 
   frontend:
-    image: ${MULTICA_WEB_IMAGE:-ghcr.io/multica-ai/multica-web}:${MULTICA_IMAGE_TAG:-latest}
+    image: ${MULTICA_WEB_REF:-${MULTICA_WEB_IMAGE:-ghcr.io/multica-ai/multica-web}:${MULTICA_IMAGE_TAG:-latest}}
     depends_on:
       - backend
     ports:

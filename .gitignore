@@ -5,6 +5,7 @@
 deploy.json
 dist/
 generated/
+.scratch/
 
 # Python/runtime artifacts
 __pycache__/
