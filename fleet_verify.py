@@ -18,6 +18,13 @@ from typing import Any
 VERIFY_SCHEMA = "fleet-verify/v1"
 _PREFLIGHT_SECTIONS = ("health", "readiness", "auth", "workspace", "runtime")
 _AGX_SECTIONS = ("installation", "version", "bundle", "node", "lifecycle")
+
+
+def _normalize_version(value: object) -> str | None:
+    text = _text_value(value)
+    if text is None:
+        return None
+    return text.strip().lower().removeprefix("v")
 _TASK_FIELDS = ("task_id", "deployment_id", "node_identity", "status", "health")
 _SENSITIVE_KEY = re.compile(
     r"(?:token|secret|password|passwd|credential|authorization|cookie|"
@@ -295,9 +302,9 @@ def _validate_agx(
     bundle_id = _text_value(sections["bundle"].get("bundle_id"))
     node_identity = _text_value(sections["node"].get("node_identity"))
     versions = [
-        _text_value(sections["installation"].get("version")),
-        _text_value(sections["version"].get("version")),
-        _text_value(sections["bundle"].get("version")),
+        _normalize_version(sections["installation"].get("version")),
+        _normalize_version(sections["version"].get("version")),
+        _normalize_version(sections["bundle"].get("version")),
     ]
     if installation_id is None:
         return None, _missing("agx.installation.installation_id")
@@ -318,7 +325,7 @@ def _validate_agx(
     if not _lifecycle_ready(sections["lifecycle"]):
         return None, _invalid("agx.lifecycle")
 
-    expected_version = _contract_value(contract, "agx", "version")
+    expected_version = _normalize_version(_contract_value(contract, "agx", "version"))
     if expected_version is not None and versions[0] != expected_version:
         return None, _mismatch("agx version")
     expected_node = _text_value((node or {}).get("node_identity"))

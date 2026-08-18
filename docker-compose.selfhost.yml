@@ -53,10 +53,25 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    # Redis is an ephemeral cache/realtime relay for this single-node install.
+    # Avoid AOF/RDB disk churn on a NAS; a restart only loses cache entries and
+    # transient realtime events, never application data.
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
   backend:
     image: ${MULTICA_BACKEND_REF:-${MULTICA_BACKEND_IMAGE:-ghcr.io/multica-ai/multica-backend}:${MULTICA_IMAGE_TAG:-latest}}
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     ports:
       - "127.0.0.1:${BACKEND_PORT:-${API_PORT:-${SERVER_PORT:-${PORT:-8080}}}}:8080"
@@ -64,6 +79,8 @@ services:
       - backend_uploads:/app/data/uploads
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-multica}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/${POSTGRES_DB:-multica}?sslmode=disable
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      REALTIME_RELAY_MODE: ${REALTIME_RELAY_MODE:-legacy}
       PORT: "8080"
       METRICS_ADDR: ${METRICS_ADDR:-}
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set}

@@ -42,7 +42,7 @@ DEFAULTS = {
     "netbird": False,
     "nas_target": "/opt/multica",
     "source_dir": "",
-    "image_tag": "v0.4.26",
+    "image_tag": "v0.4.28",
     "backend_image": "",
     "web_image": "",
     "github_device_flow_enabled": False,
@@ -1896,6 +1896,24 @@ def node_remote_stdin(
         raise RuntimeError(f"{label} 失败（退出码 {exc.returncode}）。") from exc
 
 
+def node_remote_stdin_capture(
+    args: argparse.Namespace, script: str, command: list[str], *, label: str
+) -> str:
+    """Run a checked-in node script and return stdout for structured parsing."""
+
+    try:
+        result = subprocess.run(
+            node_ssh_base(args) + command,
+            input=script.encode("utf-8"),
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(f"{label} 失败（退出码 {exc.returncode}）。") from exc
+    return result.stdout.decode("utf-8", errors="replace")
+
+
 def _fleet_image_tag(identity: str) -> str:
     return "fleet-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12]
 
@@ -2055,6 +2073,134 @@ def _client_bootstrap_command(
     if verify_only:
         command += ["--skip-install", "--verify-only"]
     return command
+
+
+def _json_between_markers(output: str, begin: str, end: str) -> object:
+    """Decode one machine-readable section from the bootstrap script."""
+
+    lines = output.splitlines()
+    try:
+        start = lines.index(begin) + 1
+        finish = lines.index(end, start)
+    except ValueError as exc:
+        raise RuntimeError(f"Multica client verification omitted {begin}.") from exc
+    body = "\n".join(lines[start:finish]).strip()
+    if not body:
+        raise RuntimeError(f"Multica client verification returned no data for {begin}.")
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Multica client verification returned invalid JSON for {begin}.") from exc
+
+
+def _live_multica_evidence(contract: dict[str, object], args: argparse.Namespace) -> dict[str, object]:
+    """Read Multica health and official CLI state without using private APIs."""
+
+    health_status = 0
+    readiness_status = 0
+    try:
+        with open_service_url_direct(args, "/health") as response:
+            health_status = response.status
+        with open_service_url_direct(args, "/readyz") as response:
+            readiness_status = response.status
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise RuntimeError(f"Multica health/readiness probe failed: {exc}") from exc
+
+    script = (PACKAGE_ROOT / "client-bootstrap.sh").read_text(encoding="utf-8")
+    output = node_remote_stdin_capture(
+        args,
+        script,
+        _client_bootstrap_command(contract, {"name": args.node_host}, args, verify_only=True)
+        + ["--output-json"],
+        label="Multica live verification",
+    )
+    auth = _json_between_markers(output, "MULTICA_VERIFY_AUTH_BEGIN", "MULTICA_VERIFY_AUTH_END")
+    workspace = _json_between_markers(
+        output, "MULTICA_VERIFY_WORKSPACE_BEGIN", "MULTICA_VERIFY_WORKSPACE_END"
+    )
+    runtime = _json_between_markers(output, "MULTICA_VERIFY_RUNTIME_BEGIN", "MULTICA_VERIFY_RUNTIME_END")
+    if not all(isinstance(value, dict) for value in (auth, workspace, runtime)):
+        raise RuntimeError("Multica live verification sections must be JSON objects.")
+    workspace_id = workspace.get("id") or workspace.get("workspace_id")
+    if not isinstance(workspace_id, str) or not workspace_id.strip():
+        raise RuntimeError("Multica workspace readback has no id.")
+    runtime_status = str(runtime.get("status") or runtime.get("state") or "").lower()
+    return {
+        "health": {"healthy": health_status == 200, "status": str(health_status)},
+        "readiness": {"ready": readiness_status == 200, "status": str(readiness_status)},
+        "auth": auth,
+        "workspace": {"available": True, "workspace_id": workspace_id.strip()},
+        "runtime": {
+            "online": runtime_status == "running",
+            "status": runtime_status or "unknown",
+            "runtime_id": runtime.get("runtime_id") or runtime.get("daemon_id") or "daemon",
+        },
+    }
+
+
+def _live_agx_evidence(contract: dict[str, object], args: argparse.Namespace) -> dict[str, object]:
+    """Read AGX's public version/status commands; never infer task success."""
+
+    agx_bin = getattr(args, "agx_bin", "agx")
+    version_output = node_remote_capture(args, f"{q(agx_bin)} version")
+    actual_version = _validate_agx_version(version_output, contract)
+    status_command = " ".join(
+        [q(agx_bin), "status", "--root", q(str(contract["agx"]["installation_root"])), "--output", "json"]
+    )
+    status_output = node_remote_capture(args, status_command)
+    try:
+        status_payload = json.loads(status_output)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("AGX status did not return JSON.") from exc
+    status = _validate_agx_reconcile_status(status_payload, contract, {"name": args.node_host})
+    phase_ready = status["phase"] == "configured"
+    initialization_ready = status["initialization"] in _AGX_INITIALIZATION_STATUSES
+    # AGX's current public status schema has no node identity or task receipt.
+    # Leave that evidence absent so FleetVerifier reports the real contract gap.
+    return {
+        "installation": {
+            "installed": phase_ready,
+            "installation_id": status["installation_id"],
+            "version": actual_version,
+        },
+        "version": {"status": "ok", "version": actual_version},
+        "bundle": {
+            "installed": phase_ready,
+            "bundle_id": status["bundle_id"],
+            "version": actual_version,
+        },
+        "node": {"registered": False, "status": "identity-not-exposed"},
+        "lifecycle": {"ready": phase_ready and initialization_ready, "status": status["initialization"]},
+    }
+
+
+def _live_task_runner(_context: dict[str, object]) -> dict[str, object]:
+    """Fail closed until AGX publishes the task connector contract."""
+
+    raise RuntimeError(
+        "AGX currently exposes no public Multica task connector; "
+        "a live disposable-task verification cannot be run"
+    )
+
+
+def _assert_live_origin_matches_contract(contract: dict[str, object], args: argparse.Namespace) -> None:
+    """Prevent health checks and CLI verification from targeting different origins."""
+
+    contract_origin = _origin(str(contract["multica"]["server_url"]), "合同中的 multica.server_url")
+    supplied_origin = resolve_target_addresses(args).service_origin
+    if supplied_origin != contract_origin:
+        raise ConfigError(
+            "--service-url/--nas-ip 与合同中的 multica.server_url 不一致："
+            f"{supplied_origin} != {contract_origin}。"
+        )
+
+
+def open_service_url_direct(args: argparse.Namespace, path: str, *, timeout: int = 5):
+    """Open a live check without inheriting HTTP(S)_PROXY for LAN/NAS traffic."""
+
+    url = resolve_target_addresses(args).service_origin.rstrip("/") + path
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    return opener.open(url, timeout=timeout)
 
 
 def apply_fleet_connector(contract: dict[str, object], node: dict[str, object], args: argparse.Namespace) -> dict[str, str]:
@@ -2258,35 +2404,45 @@ def run_fleet_apply(
 
 
 def run_fleet_verify(args: argparse.Namespace) -> int:
-    """Validate captured structured evidence without inventing live success.
-
-    Live readers are intentionally not hidden behind this command yet. The
-    evidence file is an explicit boundary: it must come from the official CLI,
-    AGX, and Multica readback path, and the verifier will still reject mock or
-    incomplete evidence.
-    """
+    """Run live preflight or validate previously captured structured evidence."""
 
     from fleet_plan import FleetPlanError, load_contract
     from fleet_verify import FleetVerifier, render
 
     try:
         contract = load_contract(args.contract)
-        payload = json.loads(args.evidence_file.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict):
-            raise ConfigError("--evidence-file 必须是 JSON object。")
-        required = {"multica", "agx", "task"}
-        missing = sorted(required - payload.keys())
-        if missing:
-            raise ConfigError("--evidence-file 缺少: " + ", ".join(missing))
-        verifier = FleetVerifier(
-            multica_reader=lambda _context: payload["multica"],
-            agx_reader=lambda _context: payload["agx"],
-            task_runner=lambda _context: payload["task"],
-        )
+        if args.live:
+            if not args.node_host:
+                raise ConfigError("--live 需要 --node-host。")
+            if not args.nas_host:
+                raise ConfigError("--live 需要 --nas-host（用于读取 NAS 服务）。")
+            if not args.nas_ip and not args.service_url:
+                raise ConfigError("--live 需要 --nas-ip 或 --service-url。")
+            _assert_live_origin_matches_contract(contract, args)
+            verifier = FleetVerifier(
+                multica_reader=lambda _context: _live_multica_evidence(contract, args),
+                agx_reader=lambda _context: _live_agx_evidence(contract, args),
+                task_runner=_live_task_runner,
+            )
+        else:
+            if args.evidence_file is None:
+                raise ConfigError("离线校验需要 --evidence-file；现场校验请使用 --live。")
+            payload = json.loads(args.evidence_file.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise ConfigError("--evidence-file 必须是 JSON object。")
+            required = {"multica", "agx", "task"}
+            missing = sorted(required - payload.keys())
+            if missing:
+                raise ConfigError("--evidence-file 缺少: " + ", ".join(missing))
+            verifier = FleetVerifier(
+                multica_reader=lambda _context: payload["multica"],
+                agx_reader=lambda _context: payload["agx"],
+                task_runner=lambda _context: payload["task"],
+            )
         result = verifier.verify(contract)
         print(render(result), end="")
         return 0 if result.get("status") == "verified" else 2
-    except (ConfigError, FleetPlanError, OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (ConfigError, FleetPlanError, OSError, UnicodeDecodeError, json.JSONDecodeError, RuntimeError) as exc:
         print(json.dumps({"status": "blocked", "error": str(exc)}, ensure_ascii=False) + "\n", end="")
         return 2
 
@@ -2523,16 +2679,24 @@ def deploy(args: argparse.Namespace) -> None:
     backup_release_state(args)
     print("[3/6] 上传 Compose、Caddy 和环境模板...")
     for name in REQUIRED_FILES:
+        # A hot update must not overwrite a live proxy config. The NAS may
+        # intentionally listen on both LAN and NetBird addresses, while the
+        # generated template represents only the selected deployment origin.
+        if getattr(args, "hot_update", False) and name == "Caddyfile":
+            continue
         copy_to_nas(args, PACKAGE_ROOT / name)
-    rendered_caddy = render_caddy(args)
-    try:
-        copy_to_nas(args, rendered_caddy)
-        remote(
-            args,
-            f"mv {q(args.nas_target + '/' + rendered_caddy.name)} {q(args.nas_target + '/Caddyfile')}",
-        )
-    finally:
-        rendered_caddy.unlink(missing_ok=True)
+    if getattr(args, "hot_update", False):
+        print("保留 NAS 当前 Caddyfile（hot-update 不改代理监听地址）。")
+    else:
+        rendered_caddy = render_caddy(args)
+        try:
+            copy_to_nas(args, rendered_caddy)
+            remote(
+                args,
+                f"mv {q(args.nas_target + '/' + rendered_caddy.name)} {q(args.nas_target + '/Caddyfile')}",
+            )
+        finally:
+            rendered_caddy.unlink(missing_ok=True)
 
     print("[4/6] 初始化或更新非敏感配置（保留部署目标上已有密钥）...")
     initialize_remote_env(args)
@@ -2950,8 +3114,15 @@ def build_parser() -> argparse.ArgumentParser:
     fleet_apply_parser.add_argument("--runtime-name", default="")
 
     fleet_verify_parser = fleet_subparsers.add_parser(
-        "verify", help="校验一节点的结构化 Multica/AGX 双侧证据"
+        "verify", help="现场读取或校验一节点的 Multica/AGX 双侧证据"
     )
+    add_common(fleet_verify_parser)
+    fleet_verify_parser.add_argument("--app-port", type=int, default=DEFAULTS["app_port"])
+    fleet_verify_parser.add_argument("--node-host", default="", help="AGX 节点 SSH 主机或别名")
+    fleet_verify_parser.add_argument("--node-ssh-port", type=int, default=0, help="AGX 节点 SSH 端口")
+    fleet_verify_parser.add_argument("--agx-bin", default="agx", help="节点上的 AGX 官方 CLI")
+    fleet_verify_parser.add_argument("--device-name", default="")
+    fleet_verify_parser.add_argument("--runtime-name", default="")
     fleet_verify_parser.add_argument(
         "--contract",
         "--contract-file",
@@ -2963,9 +3134,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fleet_verify_parser.add_argument(
         "--evidence-file",
-        required=True,
+        required=False,
         type=Path,
         help="由官方 CLI/AGX 读回生成的结构化证据 JSON；不接受 mock",
+    )
+    fleet_verify_parser.add_argument(
+        "--live",
+        action="store_true",
+        help="现场读取 NAS、官方 Multica CLI/daemon 与 AGX；缺少公开任务连接器时明确阻断",
     )
     fleet_verify_parser.add_argument(
         "--format",

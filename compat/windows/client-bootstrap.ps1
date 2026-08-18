@@ -22,18 +22,30 @@ if (-not $cliPath) {
 }
 
 try {
-    Invoke-WebRequest -Uri "$ServerUrl/health" -UseBasicParsing -TimeoutSec 10 | Out-Null
+    # LAN/NetBird health checks must not be sent through a workstation proxy.
+    $handler = New-Object System.Net.Http.HttpClientHandler
+    $handler.UseProxy = $false
+    $client = New-Object System.Net.Http.HttpClient($handler)
+    $client.Timeout = [TimeSpan]::FromSeconds(10)
+    $response = $client.GetAsync("$ServerUrl/health").GetAwaiter().GetResult()
+    if (-not $response.IsSuccessStatusCode) {
+        throw "HTTP $([int]$response.StatusCode)"
+    }
 }
 catch {
-    throw "无法访问 Multica 服务端 $ServerUrl/health。先确认 NAS 服务已启动、地址正确且网络可达。"
+    throw "Cannot reach Multica server $ServerUrl/health. Confirm the NAS service is running, the URL is correct, and the network is reachable."
+}
+finally {
+    if ($client) { $client.Dispose() }
+    if ($handler) { $handler.Dispose() }
 }
 
 if (-not (Test-Path -LiteralPath $cliPath -PathType Leaf)) {
     if ($SkipInstall) {
-        throw "找不到 Multica CLI: $cliPath。去掉 -SkipInstall，让脚本调用官方安装脚本。"
+        throw "Multica CLI not found: $cliPath. Remove -SkipInstall so the official installer can run."
     }
 
-    Write-Host "调用 Multica 官方 Windows 安装脚本..." -ForegroundColor Cyan
+    Write-Host "Running the official Multica Windows installer..." -ForegroundColor Cyan
     $previousMode = $env:MULTICA_MODE
     Remove-Item Env:MULTICA_MODE -ErrorAction SilentlyContinue
     try {
@@ -50,39 +62,39 @@ if (-not (Test-Path -LiteralPath $cliPath -PathType Leaf)) {
 }
 
 if (-not (Test-Path -LiteralPath $cliPath -PathType Leaf)) {
-    throw "安装脚本结束后仍找不到 $cliPath。请重新打开 PowerShell 后重试。"
+    throw "The installer finished but $cliPath was not found. Reopen PowerShell and try again."
 }
 
 $profileArgs = @()
 if ($Profile) { $profileArgs = @("--profile", $Profile) }
 
 if (-not $VerifyOnly) {
-    Write-Host "配置自托管服务: $ServerUrl" -ForegroundColor Cyan
-    Write-Host "浏览器会打开一次登录回调；完成后脚本会启动本机 daemon。" -ForegroundColor DarkCyan
+    Write-Host "Configuring self-hosted service: $ServerUrl" -ForegroundColor Cyan
+    Write-Host "A browser will open for one-time login; the local daemon starts after login." -ForegroundColor DarkCyan
     if ($DeviceName) { $env:MULTICA_DAEMON_DEVICE_NAME = $DeviceName }
     if ($RuntimeName) { $env:MULTICA_AGENT_RUNTIME_NAME = $RuntimeName }
     & $cliPath setup self-host @profileArgs --server-url $ServerUrl --app-url $AppUrl
     if ($LASTEXITCODE -ne 0) {
-        throw "Multica self-host 配置失败。检查 $ServerUrl/health 和注册状态。"
+        throw "Multica self-host setup failed. Check $ServerUrl/health and the registration state."
     }
     if ($WorkspaceId) {
         & $cliPath workspace switch $WorkspaceId @profileArgs
-        if ($LASTEXITCODE -ne 0) { throw "Multica workspace 绑定失败: $WorkspaceId" }
+        if ($LASTEXITCODE -ne 0) { throw "Multica workspace binding failed: $WorkspaceId" }
     }
 }
 
-Write-Host "`n认证状态:" -ForegroundColor Cyan
+Write-Host "`nAuthentication status:" -ForegroundColor Cyan
 & $cliPath auth status @profileArgs
-if ($LASTEXITCODE -ne 0) { throw "Multica 登录状态无效。" }
+if ($LASTEXITCODE -ne 0) { throw "Multica authentication is invalid." }
 
 if ($WorkspaceId) {
-    Write-Host "`nWorkspace 绑定（JSON）:" -ForegroundColor Cyan
+    Write-Host "`nWorkspace binding (JSON):" -ForegroundColor Cyan
     & $cliPath workspace get $WorkspaceId @profileArgs --output json
-    if ($LASTEXITCODE -ne 0) { throw "Multica workspace 无法读取: $WorkspaceId" }
+    if ($LASTEXITCODE -ne 0) { throw "Unable to read Multica workspace: $WorkspaceId" }
 }
 
-Write-Host "`n本机 daemon 状态（JSON）:" -ForegroundColor Cyan
+Write-Host "`nLocal daemon status (JSON):" -ForegroundColor Cyan
 & $cliPath daemon status @profileArgs --output json
-if ($LASTEXITCODE -ne 0) { throw "daemon 未能启动或未连接服务端。" }
+if ($LASTEXITCODE -ne 0) { throw "The daemon did not start or is not connected to the server." }
 
-Write-Host "`n客户端已接入。以后可直接运行: $cliPath daemon status" -ForegroundColor Green
+Write-Host "`nClient connected. Run this later to check it: $cliPath daemon status" -ForegroundColor Green

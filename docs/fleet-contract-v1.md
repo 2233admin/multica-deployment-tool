@@ -82,6 +82,23 @@ contract version is checked separately from `agx version`.
 - Multica auth, workspace, and runtime are online.
 - A disposable task can reach AGX and return a structured result.
 
+The deployment tool now exposes the live preflight seam:
+
+```bash
+python multica_deploy.py fleet verify \
+  --live --contract contract.json \
+  --nas-host nas --nas-ip 192.0.2.10 \
+  --node-host agx-node
+```
+
+`--live` reads `/health` and `/readyz`, the official Multica CLI workspace and
+daemon state, and AGX `version`/`status --output json`. It never treats those
+readbacks as a successful disposable task. With the current AGX release, the
+public status surface still does not expose `node_identity` or a Multica task
+connector, so the command must return `blocked` until those two cross-repo
+contracts are published. `--evidence-file` remains available for offline,
+already-captured evidence and is still fail-closed.
+
 ## Ownership rules
 
 The contract contains no token, password, SSH private key, model key, or database secret. Node credentials remain on the node. AGX owns node receipts and deployment state. Multica receives task IDs and redacted summaries, not the node's private state.

@@ -13,6 +13,7 @@ Options:
   --runtime-name NAME    Name shown for the runtime registered by this daemon
   --skip-install         Do not install the official Multica CLI
   --verify-only          Only verify auth and daemon state; do not open login
+  --output-json          Emit machine-readable verification sections
   -h, --help             Show this help
 EOF
 }
@@ -25,6 +26,7 @@ DEVICE_NAME=""
 RUNTIME_NAME=""
 SKIP_INSTALL=false
 VERIFY_ONLY=false
+OUTPUT_JSON=false
 
 while (($#)); do
   case "$1" in
@@ -36,6 +38,7 @@ while (($#)); do
     --runtime-name) RUNTIME_NAME="${2:?--runtime-name requires a name}"; shift 2 ;;
     --skip-install) SKIP_INSTALL=true; shift ;;
     --verify-only) VERIFY_ONLY=true; shift ;;
+    --output-json) OUTPUT_JSON=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *)
       if [[ -z "$SERVER_URL" && "$1" != -* ]]; then
@@ -63,8 +66,12 @@ case "$SERVER_URL" in
 esac
 
 if command -v curl >/dev/null 2>&1; then
-  echo "Checking Multica server at $SERVER_URL ..."
-  curl --fail --silent --show-error --max-time 10 "$SERVER_URL/health" >/dev/null
+  if $OUTPUT_JSON; then
+    curl --fail --silent --show-error --max-time 10 "$SERVER_URL/health" >/dev/null
+  else
+    echo "Checking Multica server at $SERVER_URL ..."
+    curl --fail --silent --show-error --max-time 10 "$SERVER_URL/health" >/dev/null
+  fi
 fi
 
 find_multica() {
@@ -104,7 +111,9 @@ if [[ -n "$PROFILE" ]]; then
 fi
 
 if $VERIFY_ONLY; then
-  echo "Verifying existing Multica client ..."
+  if ! $OUTPUT_JSON; then
+    echo "Verifying existing Multica client ..."
+  fi
 else
   echo "Configuring self-hosted Multica at $SERVER_URL ..."
   [[ -n "$DEVICE_NAME" ]] && export MULTICA_DAEMON_DEVICE_NAME="$DEVICE_NAME"
@@ -115,12 +124,34 @@ else
   fi
 fi
 
-echo "Authentication status:"
-"$CLI_PATH" auth status "${PROFILE_ARGS[@]}"
-if [[ -n "$WORKSPACE_ID" ]]; then
-  echo "Workspace binding:"
+if $OUTPUT_JSON; then
+  # Keep auth proof explicit even though the official command is
+  # human/stderr-only. Do not scrape its output or expose token material; its
+  # exit status is the machine-readable proof.
+  AUTHENTICATED=false
+  if "$CLI_PATH" auth status "${PROFILE_ARGS[@]}" >/dev/null 2>&1; then
+    AUTHENTICATED=true
+  fi
+  printf '%s\n' 'MULTICA_VERIFY_AUTH_BEGIN'
+  printf '{"authenticated":%s,"source":"auth-status"}\n' "$AUTHENTICATED"
+  printf '%s\n' 'MULTICA_VERIFY_AUTH_END'
+  if [[ "$AUTHENTICATED" != true ]]; then
+    exit 1
+  fi
+  printf '%s\n' 'MULTICA_VERIFY_WORKSPACE_BEGIN'
   "$CLI_PATH" workspace get "$WORKSPACE_ID" "${PROFILE_ARGS[@]}" --output json
+  printf '%s\n' 'MULTICA_VERIFY_WORKSPACE_END'
+  printf '%s\n' 'MULTICA_VERIFY_RUNTIME_BEGIN'
+  "$CLI_PATH" daemon status "${PROFILE_ARGS[@]}" --output json
+  printf '%s\n' 'MULTICA_VERIFY_RUNTIME_END'
+else
+  echo "Authentication status:"
+  "$CLI_PATH" auth status "${PROFILE_ARGS[@]}"
+  if [[ -n "$WORKSPACE_ID" ]]; then
+    echo "Workspace binding:"
+    "$CLI_PATH" workspace get "$WORKSPACE_ID" "${PROFILE_ARGS[@]}" --output json
+  fi
+  echo "Daemon status (JSON):"
+  "$CLI_PATH" daemon status "${PROFILE_ARGS[@]}" --output json
+  echo "Client is connected. Use '$CLI_PATH daemon logs' when a task does not arrive."
 fi
-echo "Daemon status (JSON):"
-"$CLI_PATH" daemon status "${PROFILE_ARGS[@]}" --output json
-echo "Client is connected. Use '$CLI_PATH daemon logs' when a task does not arrive."

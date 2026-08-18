@@ -243,7 +243,7 @@ class DeploymentToolTests(unittest.TestCase):
     def test_initialize_env_renders_callback_defaults(self):
         args = argparse.Namespace(
             nas_target="/opt/multica",
-            image_tag="v0.4.26",
+            image_tag="v0.4.28",
             backend_image="",
             web_image="",
             backend_port=3011,
@@ -264,7 +264,7 @@ class DeploymentToolTests(unittest.TestCase):
     def test_initialize_env_renders_device_flow_without_public_url(self):
         args = argparse.Namespace(
             nas_target="/opt/multica",
-            image_tag="v0.4.26",
+            image_tag="v0.4.28",
             backend_image="",
             web_image="",
             backend_port=3011,
@@ -339,6 +339,24 @@ class DeploymentToolTests(unittest.TestCase):
         self.assertIn("bind 192.0.2.10", content)
         self.assertNotIn("__BROWSER_", content)
         self.assertNotIn("__BIND_", content)
+
+    def test_live_origin_must_match_contract_origin(self):
+        contract = {"multica": {"server_url": "http://192.0.2.10:4310"}}
+        matching = argparse.Namespace(
+            nas_ip="192.0.2.10",
+            service_url="",
+            browser_url="",
+            oauth_origin="",
+            plane_url="",
+            app_port=4310,
+        )
+        multica_deploy._assert_live_origin_matches_contract(contract, matching)
+
+        mismatched = argparse.Namespace(
+            **{**vars(matching), "service_url": "http://192.0.2.11:4310"}
+        )
+        with self.assertRaisesRegex(multica_deploy.ConfigError, "不一致"):
+            multica_deploy._assert_live_origin_matches_contract(contract, mismatched)
 
     def test_saved_config_serializes_address_roles_ports_and_plane(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -535,15 +553,45 @@ class DeploymentToolTests(unittest.TestCase):
             multica_deploy,
             "remote_capture",
             return_value=(
-                "MULTICA_IMAGE_TAG=v0.4.26\n"
+                "MULTICA_IMAGE_TAG=v0.4.28\n"
                 "MULTICA_BACKEND_IMAGE=\n"
                 "MULTICA_WEB_IMAGE=\n"
                 "JWT_SECRET=must-not-be-read\n"
             ),
         ):
             state = multica_deploy.read_release_state(args)
-        self.assertEqual(state["MULTICA_IMAGE_TAG"], "v0.4.26")
+        self.assertEqual(state["MULTICA_IMAGE_TAG"], "v0.4.28")
         self.assertNotIn("JWT_SECRET", state)
+
+    def test_default_release_baseline_is_official_v0428(self):
+        self.assertEqual(multica_deploy.DEFAULTS["image_tag"], "v0.4.28")
+        self.assertIn(
+            "MULTICA_IMAGE_TAG=v0.4.28",
+            (multica_deploy.PACKAGE_ROOT / ".env.template").read_text(encoding="utf-8"),
+        )
+
+    def test_live_verify_markers_decode_only_their_json_section(self):
+        output = "\n".join(
+            [
+                "noise from the shell",
+                "MULTICA_VERIFY_AUTH_BEGIN",
+                '{"authenticated":true}',
+                "MULTICA_VERIFY_AUTH_END",
+                "MULTICA_VERIFY_RUNTIME_BEGIN",
+                '{"status":"running"}',
+                "MULTICA_VERIFY_RUNTIME_END",
+            ]
+        )
+        self.assertEqual(
+            multica_deploy._json_between_markers(
+                output, "MULTICA_VERIFY_RUNTIME_BEGIN", "MULTICA_VERIFY_RUNTIME_END"
+            ),
+            {"status": "running"},
+        )
+        with self.assertRaises(RuntimeError):
+            multica_deploy._json_between_markers(
+                output, "MULTICA_VERIFY_WORKSPACE_BEGIN", "MULTICA_VERIFY_WORKSPACE_END"
+            )
 
     def test_saved_config_excludes_application_secrets(self):
         with tempfile.TemporaryDirectory() as directory:

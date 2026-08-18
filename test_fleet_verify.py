@@ -108,6 +108,18 @@ class FleetVerifyTests(unittest.TestCase):
         self.assertEqual(result["node_identity"], "node-identity-01")
         self.assertEqual(calls, ["multica", "agx", ("task", True)])
 
+    def test_v_prefixed_agx_versions_match_contract(self):
+        contract = valid_contract()
+        contract["agx"]["version"] = "v0.1.0"
+        evidence = agx_evidence()
+        for section in ("installation", "version", "bundle"):
+            evidence[section]["version"] = "v0.1.0"
+        verifier, _calls = self.make_verifier(agx=evidence)
+
+        result = verifier.verify(contract)
+
+        self.assertEqual(result["status"], "verified")
+
     def test_missing_runtime_awaits_verification_without_running_task(self):
         multica = multica_evidence()
         del multica["runtime"]

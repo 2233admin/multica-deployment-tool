@@ -12,7 +12,7 @@ from agx_multica_connector import (
 
 
 SCHEMA = "multica.agx-connector/v1"
-CLI_VERSION = "0.4.26"
+CLI_VERSION = "0.4.28"
 
 
 def success_payload(**overrides):

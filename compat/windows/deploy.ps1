@@ -10,7 +10,7 @@ param(
     [ValidatePattern("^/[A-Za-z0-9._/-]+$")]
     [string]$NasTarget = "/opt/multica",
     [ValidatePattern("^v\d+\.\d+\.\d+$")]
-    [string]$ImageTag = "v0.4.26",
+    [string]$ImageTag = "v0.4.28",
     [Parameter(Mandatory = $true)]
     [ValidateRange(1, 65535)]
     [int]$AppPort,
