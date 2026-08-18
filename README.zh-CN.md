@@ -141,6 +141,15 @@ python .\multica_deploy.py rollback `
 
 每次成功部署前，工具只记录上一个 backend/web 镜像引用到部署目标的受限状态文件，不保存 JWT、数据库密码或 Gitea Secret。回滚不会猜测数据库迁移是否可逆；如果新版本已经执行了不可逆迁移，应先恢复数据库快照，再回滚镜像。
 
+在 Windows 管理机上，`deploy`、`upgrade` 和 `build` 成功通过 NAS 的 `/readyz` 后，会默认同步同版本的 Multica 桌面端，并把桌面端 CLI/daemon 重新绑定到当前自托管地址。桌面端会保留本机已有的 token 和 workspace，不再因为升级后回到官方服务而失效。正式版本会自动跟随 `--image-tag`；例如：
+
+```powershell
+python .\multica_deploy.py upgrade `
+  --nas-host YOUR_SSH_HOST --nas-ip YOUR_NAS_IP --image-tag v0.4.28
+```
+
+如果只想更新 NAS，或当前机器没有桌面端 CLI，可显式使用 `--no-desktop-sync`；也可以用 `--desktop-version v0.4.28` 单独指定桌面端版本。桌面端同步会检查本地 daemon 的 `/health`，失败时部署命令会报错，不会伪报成功。
+
 ### 修改 Multica 后一条命令重新部署
 
 如果你修改了自己的 Multica fork，不需要手工执行 `docker build`、`docker save`、`scp`、`docker load` 和 Compose 重启。部署工具可以直接从当前源码构建 backend/web 镜像，传到远端 Docker，再重启并检查健康状态：
@@ -203,6 +212,8 @@ Windows Agent 需要绑定本机 daemon 时，可以运行：
 ```powershell
 .\compat\windows\client-bootstrap.ps1 -ServerUrl http://YOUR_NAS_IP:3010
 ```
+
+旧的 `client-bootstrap.ps1` 仍可用于只绑定 CLI 的设备。需要随 NAS 版本自动安装/更新桌面端时，应使用上面的 Python `deploy`/`upgrade`/`build` 入口；它会在部署完成后处理桌面端安装、profile 恢复和 daemon 健康检查。
 
 ## 升级、回滚和 Gitea 变更
 
