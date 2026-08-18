@@ -12,6 +12,48 @@ import multica_deploy
 
 
 class DeploymentToolTests(unittest.TestCase):
+    def test_desktop_sync_defaults_and_opt_out(self):
+        parser = multica_deploy.build_parser()
+        base = ["upgrade", "--nas-host", "nas", "--nas-ip", "203.0.113.20"]
+        self.assertTrue(parser.parse_args(base).desktop_sync)
+        self.assertFalse(parser.parse_args(base + ["--no-desktop-sync"]).desktop_sync)
+
+    def test_desktop_version_follows_formal_image_tag(self):
+        args = argparse.Namespace(desktop_version="", image_tag="v0.4.28")
+        self.assertEqual(multica_deploy.resolve_desktop_version(args), "v0.4.28")
+        args.image_tag = "dev-20260818"
+        self.assertEqual(multica_deploy.resolve_desktop_version(args), "latest")
+
+    def test_desktop_profile_preserves_credentials_and_endpoint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile = root / "profile" / "config.json"
+            profile.parent.mkdir(parents=True)
+            profile.write_text(
+                json.dumps(
+                    {
+                        "server_url": "https://desktop-api.multica.ai",
+                        "app_url": "https://desktop-api.multica.ai",
+                        "token": "local-token",
+                        "workspace_id": "workspace-1",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.object(
+                multica_deploy,
+                "desktop_paths",
+                return_value=(root / "Multica.exe", root / "multica.exe", profile),
+            ), patch.object(multica_deploy.Path, "home", return_value=root):
+                result = multica_deploy.preserve_desktop_profile(
+                    "http://203.0.113.20:3010", "desktop-api.multica.ai"
+                )
+            payload = json.loads(result.read_text(encoding="utf-8"))
+            self.assertEqual(payload["server_url"], "http://203.0.113.20:3010")
+            self.assertEqual(payload["app_url"], "http://203.0.113.20:3010")
+            self.assertEqual(payload["token"], "local-token")
+            self.assertEqual(payload["workspace_id"], "workspace-1")
+
     def test_parser_exposes_maintenance_commands(self):
         parser = multica_deploy.build_parser()
         for command in ("upgrade", "build", "doctor", "rollback"):

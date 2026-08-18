@@ -18,6 +18,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import platform
 import re
 import shlex
 import shutil
@@ -25,6 +26,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -59,6 +61,9 @@ DEFAULTS = {
     "owner": "multica",
     "group": "multica",
     "platform": "auto",
+    "desktop_sync": True,
+    "desktop_version": "",
+    "desktop_profile": "desktop-api.multica.ai",
 }
 REQUIRED_FILES = (
     "docker-compose.selfhost.yml",
@@ -93,6 +98,8 @@ CONFIG_KEYS = (
     "backend_port",
     "frontend_port",
     "network_subnet",
+    "desktop_sync",
+    "desktop_profile",
 )
 CONFIG_OPTIONS = {
     "nas_host": ("--nas-host",),
@@ -118,7 +125,12 @@ CONFIG_OPTIONS = {
     "backend_port": ("--backend-port",),
     "frontend_port": ("--frontend-port",),
     "network_subnet": ("--network-subnet",),
+    "desktop_sync": ("--desktop-sync", "--no-desktop-sync"),
+    "desktop_profile": ("--desktop-profile",),
 }
+
+DESKTOP_RELEASE_API = "https://api.github.com/repos/multica-ai/multica/releases"
+DESKTOP_HEALTH_PORT = 19681
 
 
 class ConfigError(ValueError):
@@ -263,6 +275,7 @@ def load_config(path: Path) -> dict[str, object]:
         "service_url",
         "oauth_origin",
         "plane_url",
+        "desktop_profile",
     }
     for key in string_keys:
         if key in result and not isinstance(result[key], str):
@@ -282,6 +295,8 @@ def load_config(path: Path) -> dict[str, object]:
         raise ConfigError(f"部署配置字段 no_sudo 必须是布尔值: {path}")
     if "netbird" in result and not isinstance(result["netbird"], bool):
         raise ConfigError(f"部署配置字段 netbird 必须是布尔值: {path}")
+    if "desktop_sync" in result and not isinstance(result["desktop_sync"], bool):
+        raise ConfigError(f"部署配置字段 desktop_sync 必须是布尔值: {path}")
     return result
 
 
@@ -301,6 +316,253 @@ def save_config(args: argparse.Namespace) -> Path:
     except OSError as exc:
         raise ConfigError(f"保存部署配置失败: {path}") from exc
     return path
+
+
+def desktop_paths(profile: str) -> tuple[Path, Path, Path]:
+    """Return the installed desktop executable, bundled CLI, and profile config."""
+
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if not local_app_data:
+        raise ConfigError("Windows 桌面端同步需要 LOCALAPPDATA")
+    install_root = Path(local_app_data) / "Programs" / "@multicadesktop"
+    desktop_exe = install_root / "Multica.exe"
+    cli_exe = install_root / "resources" / "app.asar.unpacked" / "resources" / "bin" / "multica.exe"
+    profile_config = Path.home() / ".multica" / "profiles" / profile / "config.json"
+    return desktop_exe, cli_exe, profile_config
+
+
+def _read_json(path: Path) -> dict[str, object]:
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ConfigError(f"读取桌面端配置失败: {path}") from exc
+    if not isinstance(payload, dict):
+        raise ConfigError(f"桌面端配置必须是 JSON 对象: {path}")
+    return payload
+
+
+def _write_json_without_bom(path: Path, payload: dict[str, object]) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        raise ConfigError(f"写入桌面端配置失败: {path}") from exc
+
+
+def preserve_desktop_profile(server_url: str, profile: str) -> Path:
+    """Keep the local token/workspace while restoring the self-hosted endpoint."""
+
+    _, _, profile_config = desktop_paths(profile)
+    current = _read_json(profile_config)
+    global_config = _read_json(Path.home() / ".multica" / "config.json")
+    normalized_server = server_url.rstrip("/")
+    current_server = str(current.get("server_url", "")).rstrip("/")
+    global_server = str(global_config.get("server_url", "")).rstrip("/")
+    credentials = (
+        current
+        if current_server == normalized_server
+        else global_config
+        if global_server == normalized_server
+        else current
+    )
+    token = credentials.get("token")
+    if not isinstance(token, str) or not token:
+        raise ConfigError(
+            f"找不到桌面 profile 的本地 token: {profile_config}。请先在桌面端完成一次本地登录。"
+        )
+
+    if profile_config.is_file():
+        backup = profile_config.with_name("config.json.pre-desktop-sync.bak")
+        if not backup.exists():
+            try:
+                backup.write_bytes(profile_config.read_bytes())
+            except OSError as exc:
+                raise ConfigError(f"备份桌面端配置失败: {backup}") from exc
+    merged = dict(current)
+    merged.update(
+        {"server_url": normalized_server, "app_url": normalized_server, "token": token}
+    )
+    if not merged.get("workspace_id") and global_config.get("workspace_id"):
+        merged["workspace_id"] = global_config["workspace_id"]
+    _write_json_without_bom(profile_config, merged)
+    return profile_config
+
+
+def _desktop_version(path: Path) -> str:
+    if not path.is_file():
+        return ""
+    powershell = shutil.which("powershell") or r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+    if not Path(powershell).is_file() and shutil.which(powershell) is None:
+        return ""
+    command = f"(Get-Item -LiteralPath '{path}').VersionInfo.ProductVersion"
+    try:
+        result = subprocess.run(
+            [powershell, "-NoProfile", "-NonInteractive", "-Command", command],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return result.stdout.strip()
+
+
+def _version_number(value: str) -> str:
+    match = re.search(r"(?<!\d)(\d+\.\d+\.\d+)(?:\.\d+)?", value or "")
+    return match.group(1) if match else ""
+
+
+def _desktop_release(version: str) -> tuple[str, str, str]:
+    requested = version.strip() if version else "latest"
+    if requested.lower() in {"latest", "stable"}:
+        url = f"{DESKTOP_RELEASE_API}/latest"
+    else:
+        tag = requested if requested.startswith("v") else f"v{requested}"
+        url = f"{DESKTOP_RELEASE_API}/tags/{urllib.parse.quote(tag, safe='')}"
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "multica-deployment-tool",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            release = json.loads(response.read().decode("utf-8"))
+    except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+        raise ConfigError(f"读取 Multica 桌面端 release 失败: {requested}") from exc
+    tag = str(release.get("tag_name", ""))
+    release_version = _version_number(tag)
+    if not release_version:
+        raise ConfigError(f"GitHub release 没有有效版本号: {tag}")
+    machine = platform.machine().lower()
+    architecture = "arm64" if machine in {"arm64", "aarch64"} else "x64"
+    asset_name = f"multica-desktop-{release_version}-windows-{architecture}.exe"
+    for asset in release.get("assets", []):
+        if asset.get("name") == asset_name:
+            digest = str(asset.get("digest", "")).removeprefix("sha256:").lower()
+            return release_version, str(asset["browser_download_url"]), digest
+    raise ConfigError(f"release {tag} 没有 Windows {architecture} 桌面安装包")
+
+
+def _download_desktop_installer(url: str, expected_digest: str, version: str) -> Path:
+    fd, raw_path = tempfile.mkstemp(prefix=f"multica-desktop-{version}-", suffix=".exe")
+    os.close(fd)
+    destination = Path(raw_path)
+    request = urllib.request.Request(url, headers={"User-Agent": "multica-deployment-tool"})
+    digest = hashlib.sha256()
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response, destination.open("wb") as output:
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                output.write(chunk)
+                digest.update(chunk)
+        actual = digest.hexdigest().lower()
+        if expected_digest and actual != expected_digest:
+            raise ConfigError(f"桌面端安装包 SHA-256 不匹配: {actual}")
+    except (OSError, urllib.error.URLError) as exc:
+        destination.unlink(missing_ok=True)
+        raise ConfigError("下载 Multica 桌面端安装包失败") from exc
+    return destination
+
+
+def _desktop_health(profile: str, expected_server: str) -> dict[str, object] | None:
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{DESKTOP_HEALTH_PORT}/health", timeout=5
+        ) as response:
+            health = json.loads(response.read().decode("utf-8"))
+    except (OSError, urllib.error.URLError, json.JSONDecodeError):
+        return None
+    if not isinstance(health, dict):
+        return None
+    if (
+        health.get("profile") != profile
+        or str(health.get("server_url", "")).rstrip("/")
+        != expected_server.rstrip("/")
+    ):
+        return None
+    return health
+
+
+def _start_desktop_daemon(
+    cli_exe: Path, profile: str, expected_server: str
+) -> dict[str, object]:
+    if not cli_exe.is_file():
+        raise ConfigError(f"找不到桌面端 CLI: {cli_exe}")
+    subprocess.run(
+        [str(cli_exe), "--profile", profile, "daemon", "stop"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    try:
+        subprocess.Popen(
+            [str(cli_exe), "--profile", profile, "daemon", "start"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=creationflags,
+        )
+    except OSError as exc:
+        raise ConfigError("启动桌面端 CLI daemon 失败") from exc
+    for _ in range(15):
+        time.sleep(1)
+        health = _desktop_health(profile, expected_server)
+        if health is not None:
+            return health
+    raise ConfigError("桌面端 daemon 未能在本地端点上就绪")
+
+
+def resolve_desktop_version(args: argparse.Namespace) -> str:
+    explicit = getattr(args, "desktop_version", "")
+    if explicit:
+        return explicit
+    image_tag = getattr(args, "image_tag", "")
+    return image_tag if re.fullmatch(r"v?\d+\.\d+\.\d+", image_tag or "") else "latest"
+
+
+def sync_desktop(args: argparse.Namespace) -> None:
+    """Install/update the Windows desktop and bind its CLI to the deployed service."""
+
+    if not getattr(args, "desktop_sync", False):
+        print("桌面端同步：已跳过（--no-desktop-sync）")
+        return
+    if os.name != "nt":
+        print("桌面端同步：当前管理机不是 Windows，跳过")
+        return
+    profile = getattr(args, "desktop_profile", DEFAULTS["desktop_profile"])
+    server_url = resolve_target_addresses(args).service_origin
+    desktop_exe, cli_exe, _ = desktop_paths(profile)
+    desired, download_url, digest = _desktop_release(resolve_desktop_version(args))
+    current = _version_number(_desktop_version(desktop_exe))
+    if current != desired:
+        print(f"同步 Windows 桌面端：{current or '未安装'} -> v{desired}")
+        installer = _download_desktop_installer(download_url, digest, desired)
+        try:
+            subprocess.run([str(installer), "/S"], check=True, timeout=300)
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            raise ConfigError("安装 Multica 桌面端失败") from exc
+        finally:
+            installer.unlink(missing_ok=True)
+    else:
+        print(f"Windows 桌面端已是 v{desired}，跳过下载安装")
+    preserve_desktop_profile(server_url, profile)
+    health = _desktop_health(profile, server_url) or _start_desktop_daemon(
+        cli_exe, profile, server_url
+    )
+    print(f"桌面端同步完成：{health.get('cli_version', desired)} -> {health.get('server_url')}")
 
 
 def option_supplied(raw_args: list[str], option: str) -> bool:
@@ -2729,6 +2991,7 @@ def deploy(args: argparse.Namespace) -> None:
     print("安装 NAS 级 Multica watchdog...")
     install_watchdog(args)
     write_current_release_state(args)
+    sync_desktop(args)
     print(f"部署完成: 浏览器入口 {addresses.browser_origin}")
     print(f"健康检查: {addresses.service_origin}/readyz")
     print(f"OAuth 回调: {addresses.oauth_callback_url}")
@@ -2876,8 +3139,36 @@ def add_common(parser: argparse.ArgumentParser) -> None:
     parser.set_defaults(no_sudo=False)
 
 
+def add_desktop_options(parser: argparse.ArgumentParser) -> None:
+    desktop_group = parser.add_mutually_exclusive_group()
+    desktop_group.add_argument(
+        "--desktop-sync",
+        dest="desktop_sync",
+        action="store_true",
+        default=DEFAULTS["desktop_sync"],
+        help="Windows 部署机自动安装匹配版本的桌面端并恢复本地 profile",
+    )
+    desktop_group.add_argument(
+        "--no-desktop-sync",
+        dest="desktop_sync",
+        action="store_false",
+        help="不在 deploy/upgrade/build 后同步 Windows 桌面端",
+    )
+    parser.add_argument(
+        "--desktop-version",
+        default=DEFAULTS["desktop_version"],
+        help="桌面端版本；默认跟随 --image-tag 的正式版本，否则使用 latest",
+    )
+    parser.add_argument(
+        "--desktop-profile",
+        default=DEFAULTS["desktop_profile"],
+        help="桌面端 CLI profile 名称",
+    )
+
+
 def add_deploy_options(parser: argparse.ArgumentParser) -> None:
     add_common(parser)
+    add_desktop_options(parser)
     parser.add_argument("--image-tag", default=DEFAULTS["image_tag"])
     parser.add_argument(
         "--hot-update",

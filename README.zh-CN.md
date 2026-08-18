@@ -4,6 +4,8 @@
 
 当前仓库名 `multica-deployment-tool` 作为旧名保留。推荐的新仓库名候选是 `multica-local-deploy`；本阶段不直接重命名 GitHub 仓库。
 
+这是面向内网和自托管场景的可重复部署工具：统一处理 NAS/Linux Docker 部署、源码构建、升级、回滚、NetBird 私网、Gitea OAuth，以及 Windows Multica 桌面端的版本同步和本地 profile 恢复。
+
 ## Multica、Plane、Gitea/GitHub、NetBird 的关系
 
 - Multica：本地部署的主服务和任务入口。
@@ -103,7 +105,7 @@ python .\install.py
 2. **服务器部署**：向导写入你提供的地址和端口，生成目标主机密钥，启动 Multica，并保留已有数据库和 `.env`。
 3. **入口验证**：打开报告中的浏览器入口；运行 `status` 检查 `/health`、`/readyz`、容器和可选 Plane。
 4. **登录授权**：内网自托管优先 Gitea OAuth；邮箱验证可作为回退。GitHub Device Flow 适合本地桌面授权，不需要把 GitHub 长期 token 手工复制到桌面端。
-5. **桌面端连接**：当前版本手动输入服务器入口并完成浏览器登录；自动发现和一次性配对属于后续阶段。
+5. **桌面端连接**：Windows 管理机上的 `deploy`、`upgrade` 和 `build` 在 NAS `/readyz` 成功后，会自动安装匹配版本的桌面端、恢复本地 token/workspace，并检查 CLI daemon 健康状态。
 6. **代码源连接**：登录 Multica 后，在代码源/集成设置中选择 GitHub、Gitea 或其他自托管 Git，完成仓库授权、选择和连接验证。部署包负责服务器地址与 GitHub App 基础配置，不替用户选择仓库或复制长期代码源密钥。
 
 登录与代码源是两个独立步骤。Gitea OAuth 适合内网自托管登录；GitHub Device Flow 适合本地桌面授权；GitHub App 的安装和 webhook 适合仓库事件集成，但 webhook 必须使用公网 HTTPS origin。`github` 命令只保存 GitHub App 基础参数并打印 setup/webhook URL，不会自动创建 GitHub App；没有公网 HTTPS 时不能把 LAN/NetBird 地址当作 webhook 地址。
@@ -121,11 +123,23 @@ python .\multica_deploy.py status `
 
 Plane 是可选的。使用向导输入 URL，或传 `--plane-url https://YOUR_PLANE_HOST`。未配置 Plane 不会阻止 Multica；报告会把“未配置”“可达”和“不可达”分开显示。
 
-## 桌面端首次连接：当前可用与规划中
+## Windows 桌面端同步
 
-当前可用：部署结束后，复制报告中的浏览器入口，在桌面端或本地 CLI 的自托管设置中输入它，再通过浏览器完成登录。客户端引导脚本会检查 `/health`，配置官方 CLI，并验证 `auth status` 与 daemon 状态。
+在 Windows 管理机上，桌面端同步默认开启，并跟随正式的 `--image-tag`。例如升级到 Multica `v0.4.28`：
 
-当前未实现：桌面端自动发现、二维码/设备码、服务器一次性配对码、配对撤销/重新配对和版本兼容握手。当前报告不会生成配对码，也不会向桌面端下发长期服务端密钥。
+```powershell
+python .\multica_deploy.py upgrade `
+  --nas-host YOUR_SSH_HOST --nas-ip YOUR_TARGET_ADDRESS `
+  --image-tag v0.4.28
+```
+
+工具会保留已有 token 和 workspace，把桌面端 profile 的 `server_url`/`app_url` 恢复为当前自托管地址，并验证本地 `/health`。版本不匹配时才下载对应的官方 Windows 安装包；安装包会校验 SHA-256。
+
+如果只想更新 NAS，使用 `--no-desktop-sync`；如果部署镜像是开发标签，可使用 `--desktop-version v0.4.28` 显式指定桌面端版本。profile 改写前会生成 `config.json.pre-desktop-sync.bak`。
+
+旧的 `compat/windows/client-bootstrap.ps1` 仍可用于只绑定 CLI 的设备；需要随部署自动更新桌面端时，应使用 Python 的 `deploy`/`upgrade`/`build` 入口。
+
+当前未实现：桌面端自动发现、二维码/设备码、服务器一次性配对码、配对撤销/重新配对。当前工具不会向桌面端下发服务端长期密钥。
 
 后续阶段应复用现有健康检查、浏览器登录和官方 CLI/daemon 接口，使用短时、单次消费的凭证；凭证应有过期、撤销、重新配对和最低版本策略，并能区分地址不可达、服务未启动、凭证过期、认证失败和版本不兼容。LAN 与 NetBird 应由桌面端选择或验证可用地址。
 
@@ -146,9 +160,24 @@ Plane 是可选的。使用向导输入 URL，或传 `--plane-url https://YOUR_P
 
 ## 更新和安全
 
-重复运行 `deploy` 或 `upgrade` 会保留目标主机已有 `.env`、数据库和上传数据，只更新入口配置、Compose 和镜像。更新前运行 `doctor`；回退使用 `rollback`，不要删除数据库卷。
+重复运行 `deploy` 或 `upgrade` 会保留目标主机已有 `.env`、数据库和上传数据，只更新入口配置、Compose、镜像，以及 Windows 管理机上的匹配桌面端。更新前运行 `doctor`；回退使用 `rollback`，不要删除数据库卷。
 
 不要提交 `.env`、OAuth secret、SMTP 密码、GitHub 私钥或 SSH 私钥。对外提供访问时必须配置正确的 HTTPS 反向代理和证书，仅打开 HTTP 端口不等于完成 HTTPS。
+
+## 分支、标签和 Release 约定
+
+| 名称 | 用途 | 规则 |
+| --- | --- | --- |
+| `main` | 当前可发布的稳定部署工具 | 通过测试后合并；正式版本从这里打 tag |
+| `feat/*` | 功能开发分支，例如 `feat/netbird-private-overlay` | 一个主题一个分支，完成后合并并关闭 |
+| `imgbot` | 图片优化自动化分支 | 只接受自动生成的图片优化提交，不放业务代码 |
+| `vMAJOR.MINOR.PATCH` | 部署工具 Release 版本 | 例如 `v0.1.0`；只给工具本身打版本 |
+| `dev-YYYYMMDD` / `local-*` | 本地源码构建标签 | 只用于验收或临时部署，不创建正式 Release |
+| `v0.4.xx` | Multica 服务端/桌面端版本 | 通过 `--image-tag` 传入；桌面端正式版本默认跟随它 |
+
+Issue/PR 标签统一使用：`bug`（故障）、`enhancement`（功能）、`documentation`（文档）、`deployment`（部署/升级/回滚）、`desktop-sync`（桌面端同步）、`netbird`（私网连通）、`release`（版本发布）和 `ready-for-agent`（范围与验收条件已明确）。
+
+当前首个工具 Release 目标为 `v0.1.0`，对应 Multica `v0.4.28` 的部署与 Windows 桌面端同步能力。
 
 ## 高级部署与仓库迁移
 
