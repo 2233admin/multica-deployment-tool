@@ -17,15 +17,48 @@ class DeploymentToolTests(unittest.TestCase):
         base = ["upgrade", "--nas-host", "nas", "--nas-ip", "203.0.113.20"]
         args = parser.parse_args(base)
         self.assertTrue(args.desktop_sync)
-        self.assertEqual(args.image_tag, "v0.4.29")
+        self.assertEqual(args.image_tag, "latest")
         self.assertEqual(args.desktop_version, "")
         self.assertFalse(parser.parse_args(base + ["--no-desktop-sync"]).desktop_sync)
 
-    def test_desktop_version_follows_formal_image_tag(self):
+    def test_desktop_version_follows_runtime_before_image_tag(self):
         args = argparse.Namespace(desktop_version="", image_tag="v0.4.28")
+        self.assertEqual(
+            multica_deploy.resolve_desktop_version(args, "v0.4.30"), "v0.4.30"
+        )
         self.assertEqual(multica_deploy.resolve_desktop_version(args), "v0.4.28")
         args.image_tag = "dev-20260818"
         self.assertEqual(multica_deploy.resolve_desktop_version(args), "latest")
+
+    def test_runtime_version_requires_matching_backend_and_frontend_labels(self):
+        args = argparse.Namespace(
+            nas_target="/volume1/docker/multica",
+            docker_path="docker",
+            no_sudo=False,
+        )
+        with patch.object(multica_deploy, "compose", return_value="compose"), patch.object(
+            multica_deploy, "privileged", return_value="docker"
+        ), patch.object(
+            multica_deploy,
+            "remote_capture",
+            return_value="backend=v0.4.30\nfrontend=v0.4.30\n",
+        ):
+            self.assertEqual(multica_deploy.detect_runtime_version(args), "v0.4.30")
+
+    def test_runtime_version_rejects_mismatched_labels(self):
+        args = argparse.Namespace(
+            nas_target="/volume1/docker/multica",
+            docker_path="docker",
+            no_sudo=False,
+        )
+        with patch.object(multica_deploy, "compose", return_value="compose"), patch.object(
+            multica_deploy, "privileged", return_value="docker"
+        ), patch.object(
+            multica_deploy,
+            "remote_capture",
+            return_value="backend=v0.4.30\nfrontend=v0.4.29\n",
+        ):
+            self.assertEqual(multica_deploy.detect_runtime_version(args), "")
 
     def test_desktop_profile_preserves_credentials_and_endpoint(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -608,10 +641,10 @@ class DeploymentToolTests(unittest.TestCase):
         self.assertEqual(state["MULTICA_IMAGE_TAG"], "v0.4.28")
         self.assertNotIn("JWT_SECRET", state)
 
-    def test_default_release_baseline_is_official_v0429(self):
-        self.assertEqual(multica_deploy.DEFAULTS["image_tag"], "v0.4.29")
+    def test_default_release_mode_follows_running_runtime(self):
+        self.assertEqual(multica_deploy.DEFAULTS["image_tag"], "latest")
         self.assertIn(
-            "MULTICA_IMAGE_TAG=v0.4.28",
+            "MULTICA_IMAGE_TAG=latest",
             (multica_deploy.PACKAGE_ROOT / ".env.template").read_text(encoding="utf-8"),
         )
 

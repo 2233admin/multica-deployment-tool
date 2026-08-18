@@ -44,9 +44,9 @@ DEFAULTS = {
     "netbird": False,
     "nas_target": "/opt/multica",
     "source_dir": "",
-    # Keep the default aligned with the current official Multica release.  A
-    # caller can still pin another tag explicitly for rollback or local builds.
-    "image_tag": "v0.4.29",
+    # Follow the moving official runtime by default. Exact tags remain
+    # available for rollback, reproducible deploys, and local builds.
+    "image_tag": "latest",
     "backend_image": "",
     "web_image": "",
     "github_device_flow_enabled": False,
@@ -527,15 +527,53 @@ def _start_desktop_daemon(
     raise ConfigError("桌面端 daemon 未能在本地端点上就绪")
 
 
-def resolve_desktop_version(args: argparse.Namespace) -> str:
+def detect_runtime_version(args: argparse.Namespace) -> str:
+    """Read the version labels from the running NAS backend and frontend."""
+
+    compose_command = compose(args)
+    docker = privileged(args, q(docker_path(args)))
+    command = textwrap.dedent(
+        f"""
+        set -eu
+        for service in backend frontend; do
+          container=$({compose_command} ps -q "$service" | head -n 1)
+          test -n "$container"
+          version=$({docker} inspect --format '{{{{index .Config.Labels "org.opencontainers.image.version"}}}}' "$container")
+          printf '%s=%s\\n' "$service" "$version"
+        done
+        """
+    ).strip()
+    try:
+        output = remote_capture(args, command)
+    except (ConfigError, OSError, RuntimeError):
+        return ""
+    versions: dict[str, str] = {}
+    for line in output.splitlines():
+        service, separator, value = line.partition("=")
+        if separator and service in {"backend", "frontend"}:
+            normalized = _version_number(value)
+            if normalized:
+                versions[service] = normalized
+    if set(versions) != {"backend", "frontend"}:
+        return ""
+    if len(set(versions.values())) != 1:
+        return ""
+    return f"v{versions['backend']}"
+
+
+def resolve_desktop_version(
+    args: argparse.Namespace, runtime_version: str = ""
+) -> str:
     explicit = getattr(args, "desktop_version", "")
     if explicit:
         return explicit
+    if runtime_version:
+        return runtime_version
     image_tag = getattr(args, "image_tag", "")
     return image_tag if re.fullmatch(r"v?\d+\.\d+\.\d+", image_tag or "") else "latest"
 
 
-def sync_desktop(args: argparse.Namespace) -> None:
+def sync_desktop(args: argparse.Namespace, runtime_version: str = "") -> None:
     """Install/update the Windows desktop and bind its CLI to the deployed service."""
 
     if not getattr(args, "desktop_sync", False):
@@ -547,7 +585,15 @@ def sync_desktop(args: argparse.Namespace) -> None:
     profile = getattr(args, "desktop_profile", DEFAULTS["desktop_profile"])
     server_url = resolve_target_addresses(args).service_origin
     desktop_exe, cli_exe, _ = desktop_paths(profile)
-    desired, download_url, digest = _desktop_release(resolve_desktop_version(args))
+    runtime_version = runtime_version or detect_runtime_version(args)
+    if not runtime_version and not getattr(args, "desktop_version", ""):
+        image_tag = getattr(args, "image_tag", "")
+        if not re.fullmatch(r"v?\d+\.\d+\.\d+", image_tag or ""):
+            print("桌面端同步：NAS runtime 没有统一的正式版本标签，跳过（dev/自定义镜像）")
+            return
+    desired, download_url, digest = _desktop_release(
+        resolve_desktop_version(args, runtime_version)
+    )
     current = _version_number(_desktop_version(desktop_exe))
     if current != desired:
         print(f"同步 Windows 桌面端：{current or '未安装'} -> v{desired}")
@@ -561,10 +607,15 @@ def sync_desktop(args: argparse.Namespace) -> None:
     else:
         print(f"Windows 桌面端已是 v{desired}，跳过下载安装")
     preserve_desktop_profile(server_url, profile)
-    health = _desktop_health(profile, server_url) or _start_desktop_daemon(
-        cli_exe, profile, server_url
-    )
-    print(f"桌面端同步完成：{health.get('cli_version', desired)} -> {health.get('server_url')}")
+    health = _desktop_health(profile, server_url)
+    if health is None or _version_number(str(health.get("cli_version", ""))) != desired:
+        health = _start_desktop_daemon(cli_exe, profile, server_url)
+    actual_cli_version = _version_number(str(health.get("cli_version", "")))
+    if actual_cli_version != desired:
+        raise ConfigError(
+            f"桌面端 CLI 版本未对齐：runtime=v{desired}，CLI={actual_cli_version or 'unknown'}"
+        )
+    print(f"桌面端同步完成：runtime/CLI v{desired} -> {health.get('server_url')}")
 
 
 def option_supplied(raw_args: list[str], option: str) -> bool:
@@ -912,32 +963,41 @@ def backup_release_state(args: argparse.Namespace) -> None:
     """Save the currently deployed image references before changing Compose."""
 
     previous = release_state_path(args, "previous")
-    script = """
-set -eu
-target='__TARGET__'
-env_file="$target/.env"
-state='__STATE__'
-if [ -f "$env_file" ]; then
-  tag=$(sed -n 's/^MULTICA_IMAGE_TAG=//p' "$env_file" | tail -n 1)
-  backend=$(sed -n 's/^MULTICA_BACKEND_IMAGE=//p' "$env_file" | tail -n 1)
-  web=$(sed -n 's/^MULTICA_WEB_IMAGE=//p' "$env_file" | tail -n 1)
-  backend_ref=$(sed -n 's/^MULTICA_BACKEND_REF=//p' "$env_file" | tail -n 1)
-  web_ref=$(sed -n 's/^MULTICA_WEB_REF=//p' "$env_file" | tail -n 1)
-  if [ -n "$tag" ]; then
-    umask 077
-    printf 'MULTICA_IMAGE_TAG=%s\nMULTICA_BACKEND_IMAGE=%s\nMULTICA_WEB_IMAGE=%s\nMULTICA_BACKEND_REF=%s\nMULTICA_WEB_REF=%s\n' \
-      "$tag" "$backend" "$web" "$backend_ref" "$web_ref" > "$state"
-    chmod 600 "$state"
-  fi
-fi
-""".strip()
+    script = textwrap.dedent(
+        """
+        set -eu
+        target='__TARGET__'
+        env_file="$target/.env"
+        current="$target/.multica-release.current"
+        state='__STATE__'
+        if [ -f "$current" ]; then
+          umask 077
+          cp "$current" "$state"
+          chmod 600 "$state"
+        elif [ -f "$env_file" ]; then
+          tag=$(sed -n 's/^MULTICA_IMAGE_TAG=//p' "$env_file" | tail -n 1)
+          backend=$(sed -n 's/^MULTICA_BACKEND_IMAGE=//p' "$env_file" | tail -n 1)
+          web=$(sed -n 's/^MULTICA_WEB_IMAGE=//p' "$env_file" | tail -n 1)
+          backend_ref=$(sed -n 's/^MULTICA_BACKEND_REF=//p' "$env_file" | tail -n 1)
+          web_ref=$(sed -n 's/^MULTICA_WEB_REF=//p' "$env_file" | tail -n 1)
+          if [ -n "$tag" ]; then
+            umask 077
+            printf 'MULTICA_IMAGE_TAG=%s\nMULTICA_BACKEND_IMAGE=%s\nMULTICA_WEB_IMAGE=%s\nMULTICA_BACKEND_REF=%s\nMULTICA_WEB_REF=%s\n' \
+              "$tag" "$backend" "$web" "$backend_ref" "$web_ref" > "$state"
+            chmod 600 "$state"
+          fi
+        fi
+        """
+    ).strip()
     remote(
         args,
         script.replace("__TARGET__", args.nas_target).replace("__STATE__", previous),
     )
 
 
-def write_current_release_state(args: argparse.Namespace) -> None:
+def write_current_release_state(
+    args: argparse.Namespace, runtime_version: str = ""
+) -> None:
     """Record the deployed image references without storing any secret."""
 
     current = release_state_path(args, "current")
@@ -955,7 +1015,7 @@ chmod 600 "$state"
 """.strip()
     replacements = {
         "__STATE__": current,
-        "__TAG__": args.image_tag,
+        "__TAG__": runtime_version or args.image_tag,
         "__BACKEND__": backend,
         "__WEB__": web,
         "__BACKEND_REF__": backend_ref,
@@ -2992,8 +3052,15 @@ def deploy(args: argparse.Namespace) -> None:
         wait_for_backend_ready(args, addresses)
     print("安装 NAS 级 Multica watchdog...")
     install_watchdog(args)
-    write_current_release_state(args)
-    sync_desktop(args)
+    runtime_version = ""
+    if getattr(args, "desktop_sync", False) and os.name == "nt":
+        runtime_version = detect_runtime_version(args)
+        if runtime_version:
+            print(f"已检测 NAS runtime 版本：{runtime_version}")
+        elif not getattr(args, "desktop_version", ""):
+            print("未检测到 NAS runtime 的正式版本标签；桌面端同步将按安全策略跳过。")
+    write_current_release_state(args, runtime_version)
+    sync_desktop(args, runtime_version)
     print(f"部署完成: 浏览器入口 {addresses.browser_origin}")
     print(f"健康检查: {addresses.service_origin}/readyz")
     print(f"OAuth 回调: {addresses.oauth_callback_url}")
@@ -3171,7 +3238,11 @@ def add_desktop_options(parser: argparse.ArgumentParser) -> None:
 def add_deploy_options(parser: argparse.ArgumentParser) -> None:
     add_common(parser)
     add_desktop_options(parser)
-    parser.add_argument("--image-tag", default=DEFAULTS["image_tag"])
+    parser.add_argument(
+        "--image-tag",
+        default=DEFAULTS["image_tag"],
+        help="NAS runtime 镜像标签；默认 latest，桌面 CLI 会跟随运行中容器的正式版本标签",
+    )
     parser.add_argument(
         "--hot-update",
         action="store_true",

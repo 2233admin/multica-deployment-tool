@@ -97,7 +97,7 @@ OAuth 回调由你输入的 origin 和固定回调路径构造：
 2. **服务器部署**：向导写入你填写的地址和端口，生成目标主机密钥，启动 Multica，并保留已有数据库和 `.env`。
 3. **入口验证**：打开报告中的浏览器入口；运行 `status` 确认 `/health`、`/readyz`、容器状态和可选 Plane 状态。
 4. **登录授权**：私网自托管优先使用 Gitea OAuth；邮箱验证可作为本地回退。GitHub Device Flow 适合本地授权桌面端，避免把 GitHub 长期 token 手工复制到桌面端。
-5. **桌面端连接**：当前版本需要手动输入服务器入口并完成浏览器登录；一次性配对和自动发现属于后续阶段。
+5. **桌面端连接**：部署完成后，工具读取 NAS 上实际运行的 backend/frontend runtime 版本，并让 Windows 桌面端 CLI/daemon 跟随同一个正式版本。
 6. **代码源连接**：登录后在 Multica 的代码源/集成设置中选择 GitHub、Gitea 或其他自托管 Git，完成仓库授权、仓库选择和连接验证。部署包负责服务器地址与 GitHub App 基础配置，不替用户选择仓库或复制长期代码源密钥。
 
 代码源与用户登录是两件事。Gitea OAuth 适合内网自托管登录；GitHub Device Flow 适合本地桌面授权；GitHub App 的安装和 webhook 适合仓库事件集成，但 webhook 必须有公网 HTTPS origin。当前 `github` 命令会保存 GitHub App 基础参数并打印 setup/webhook URL，不会自动创建 GitHub App，也不会在没有公网 HTTPS 时伪造 webhook 成功。
@@ -137,9 +137,9 @@ Plane 是可选项。通过向导输入 URL，或使用 `--plane-url https://YOU
 
 ## 桌面端首次连接
 
-当前可用流程是：部署完成后复制报告中的 Multica 浏览器入口，在桌面端或本地 CLI 的自托管设置中输入该 URL，然后按浏览器登录流程完成认证。仓库中的客户端引导脚本会检查 `/health`，配置官方 CLI，并验证 `auth status` 和 daemon 状态。
+当前可用流程是：`deploy`/`upgrade` 默认使用官方滚动标签 `latest`；服务启动并通过 `/readyz` 后，工具从运行中容器的 OCI version label 检测真实版本，再从官方 release 下载同版本 Windows 安装包，保留本机 token/workspace，并把 CLI daemon 绑定到当前自托管地址。若 backend/frontend 版本标签不一致，或是没有正式版本标签的 `dev`/自定义镜像，桌面同步会安全跳过，不会混用版本。需要回滚或人工指定时可使用 `--image-tag vX.Y.Z` 或 `--desktop-version vX.Y.Z`。
 
-当前尚未实现：服务器生成一次性配对码、二维码/设备码授权、桌面端自动发现地址、配对撤销和版本兼容握手。因此本版本不会声称“打开桌面端即可自动配对”，也不会把长期服务端密钥下发到桌面端。
+当前仍未实现服务器生成一次性配对码、二维码/设备码授权和配对撤销；首次登录仍需完成官方登录流程。版本同步和 endpoint 绑定不依赖把长期服务端密钥写入部署配置。
 
 后续配对阶段应复用现有健康检查、浏览器登录和官方 CLI/daemon seam，采用短时一次性凭证，明确过期、单次消费、撤销/重新配对、失败原因和最低兼容版本，并覆盖 LAN 与 NetBird 地址选择。配对完成后只下发非敏感运行配置和短期授权结果。
 
@@ -161,7 +161,7 @@ Plane 是可选项。通过向导输入 URL，或使用 `--plane-url https://YOU
 
 ## 更新、重复部署和安全
 
-重复运行 `deploy` 或 `upgrade` 会保留目标主机已有 `.env`、数据库和上传数据，只更新 Compose、入口配置和镜像。更新前可运行 `doctor`；需要回退时使用 `rollback`，不要删除数据库卷。
+重复运行 `deploy` 或 `upgrade` 会保留目标主机已有 `.env`、数据库和上传数据，只更新 Compose、入口配置和镜像。默认 `latest` 用于滚动跟随官方 runtime；工具会在服务真正启动后读取运行中容器的版本，再同步同版本桌面 CLI。更新前可运行 `doctor`；需要回退时使用 `rollback`，不要删除数据库卷。
 
 管理机配置只保存非敏感部署设置。不要提交 `.env`、OAuth secret、SMTP 密码、GitHub 私钥或 SSH 私钥。对外暴露前请使用正确的 HTTPS 反向代理和证书；仅打开 HTTP 端口不等于完成 HTTPS 配置。
 
