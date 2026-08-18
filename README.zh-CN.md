@@ -160,6 +160,26 @@ python multica_deploy.py build --source-dir YOUR_MULTICA_CHECKOUT --image-tag lo
 
 `--hot-update` 只逐个替换 backend 和 frontend，等待 backend `/readyz` 后再替换 frontend；PostgreSQL、数据卷和 Caddy 保持运行。它是低停机快速更新，不是开发环境里的浏览器 HMR。Docker Desktop 会复用本机构建缓存，后续改动不需要 NAS 再拉依赖。
 
+### 使用仓库内的 v0.4.28 + Gitea 适配源码
+
+本部署包的可复现 Gitea 登录适配源码位于 Multica 的 `multica-nas-v0.4.28` 分支。其他管理机可以分别克隆两个仓库，再从该分支构建镜像：
+
+```powershell
+git clone https://github.com/2233admin/multica-deployment-tool.git
+git clone --branch multica-nas-v0.4.28 https://github.com/2233admin/multica.git multica-source
+python .\multica_deploy.py build `
+  --source-dir .\multica-source `
+  --nas-host YOUR_SSH_HOST `
+  --nas-ip YOUR_TARGET_ADDRESS `
+  --browser-url http://YOUR_BROWSER_HOST:YOUR_APP_PORT `
+  --service-url http://YOUR_SERVICE_HOST:YOUR_APP_PORT `
+  --oauth-origin http://YOUR_BROWSER_HOST:YOUR_APP_PORT `
+  --image-tag v0.4.28-gitea `
+  --hot-update
+```
+
+构建机需要 Docker、Python 3.9+、SSH 和 SCP；目标 NAS 只需要可通过 SSH 执行 Docker Compose。Gitea 的 client secret、部署密钥和现有 `.env` 只在目标机配置，不要提交到仓库。
+
 推荐仓库 slug：`multica-local-deploy`。备选：`multica-local-deployment`。真正重命名时需要同步 clone URL、安装命令、脚本和发布包中的链接，以及 issue/PR 链接；GitHub 旧仓库的 redirect 和旧名兼容标识也要保留。因此本阶段只统一产品标题，不直接重命名仓库。
 
 提交改动前运行完整 Python 测试、CLI `--help`、安装器入口 smoke test 和无固定 IP/Plane 地址静态搜索。
