@@ -472,6 +472,9 @@ def _download_desktop_installer(url: str, expected_digest: str, version: str) ->
         actual = digest.hexdigest().lower()
         if expected_digest and actual != expected_digest:
             raise ConfigError(f"桌面端安装包 SHA-256 不匹配: {actual}")
+    except ConfigError:
+        destination.unlink(missing_ok=True)
+        raise
     except (OSError, urllib.error.URLError) as exc:
         destination.unlink(missing_ok=True)
         raise ConfigError("下载 Multica 桌面端安装包失败") from exc
@@ -525,6 +528,29 @@ def _start_desktop_daemon(
         if health is not None:
             return health
     raise ConfigError("桌面端 daemon 未能在本地端点上就绪")
+
+
+def _desktop_cli_capability(cli_exe: Path) -> str:
+    """Probe the local CLI daemon seam used by endpoint/profile synchronization."""
+
+    if not cli_exe.is_file():
+        return f"找不到桌面端 CLI: {cli_exe}"
+    try:
+        result = subprocess.run(
+            [str(cli_exe), "daemon", "--help"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=20,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"无法探测桌面端 CLI 能力: {exc}"
+    output = f"{result.stdout}\n{result.stderr}".lower()
+    if result.returncode != 0 or "daemon" not in output:
+        return "当前桌面端 CLI 不支持 daemon/profile 同步能力"
+    return ""
 
 
 def detect_runtime_version(args: argparse.Namespace) -> str:
@@ -591,30 +617,49 @@ def sync_desktop(args: argparse.Namespace, runtime_version: str = "") -> None:
         if not re.fullmatch(r"v?\d+\.\d+\.\d+", image_tag or ""):
             print("桌面端同步：NAS runtime 没有统一的正式版本标签，跳过（dev/自定义镜像）")
             return
-    desired, download_url, digest = _desktop_release(
-        resolve_desktop_version(args, runtime_version)
-    )
+    try:
+        desired, download_url, digest = _desktop_release(
+            resolve_desktop_version(args, runtime_version)
+        )
+    except ConfigError as exc:
+        print(f"桌面端同步：当前 runtime 没有兼容的官方桌面包，跳过（{exc}）")
+        return
     current = _version_number(_desktop_version(desktop_exe))
     if current != desired:
         print(f"同步 Windows 桌面端：{current or '未安装'} -> v{desired}")
-        installer = _download_desktop_installer(download_url, digest, desired)
+        try:
+            installer = _download_desktop_installer(download_url, digest, desired)
+        except ConfigError as exc:
+            print(f"桌面端同步：下载安装包失败，跳过（{exc}）")
+            return
         try:
             subprocess.run([str(installer), "/S"], check=True, timeout=300)
         except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-            raise ConfigError("安装 Multica 桌面端失败") from exc
+            print(f"桌面端同步：安装失败，跳过（{exc}）")
+            return
         finally:
             installer.unlink(missing_ok=True)
     else:
         print(f"Windows 桌面端已是 v{desired}，跳过下载安装")
-    preserve_desktop_profile(server_url, profile)
-    health = _desktop_health(profile, server_url)
-    if health is None or _version_number(str(health.get("cli_version", ""))) != desired:
-        health = _start_desktop_daemon(cli_exe, profile, server_url)
+    capability_issue = _desktop_cli_capability(cli_exe)
+    if capability_issue:
+        print(f"桌面端同步：当前 CLI 不兼容本地同步能力，跳过（{capability_issue}）")
+        return
+    try:
+        preserve_desktop_profile(server_url, profile)
+        health = _desktop_health(profile, server_url)
+        if health is None or _version_number(str(health.get("cli_version", ""))) != desired:
+            health = _start_desktop_daemon(cli_exe, profile, server_url)
+    except ConfigError as exc:
+        print(f"桌面端同步：本地 profile/daemon 不兼容，跳过（{exc}）")
+        return
     actual_cli_version = _version_number(str(health.get("cli_version", "")))
     if actual_cli_version != desired:
-        raise ConfigError(
-            f"桌面端 CLI 版本未对齐：runtime=v{desired}，CLI={actual_cli_version or 'unknown'}"
+        print(
+            f"桌面端同步：CLI 版本未对齐，跳过（runtime=v{desired}，"
+            f"CLI={actual_cli_version or 'unknown'}）"
         )
+        return
     print(f"桌面端同步完成：runtime/CLI v{desired} -> {health.get('server_url')}")
 
 

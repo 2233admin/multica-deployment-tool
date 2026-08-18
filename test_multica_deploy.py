@@ -2,6 +2,7 @@ import argparse
 import inspect
 import io
 import json
+import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -59,6 +60,30 @@ class DeploymentToolTests(unittest.TestCase):
             return_value="backend=v0.4.30\nfrontend=v0.4.29\n",
         ):
             self.assertEqual(multica_deploy.detect_runtime_version(args), "")
+
+    def test_desktop_cli_capability_probe_accepts_daemon_help(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cli = Path(directory) / "multica.exe"
+            cli.write_bytes(b"placeholder")
+            completed = subprocess.CompletedProcess(
+                [str(cli)], 0, stdout="multica daemon <command>", stderr=""
+            )
+            with patch.object(multica_deploy.subprocess, "run", return_value=completed):
+                self.assertEqual(
+                    multica_deploy._desktop_cli_capability(cli), ""
+                )
+
+    def test_desktop_cli_capability_probe_rejects_missing_daemon(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cli = Path(directory) / "multica.exe"
+            cli.write_bytes(b"placeholder")
+            completed = subprocess.CompletedProcess(
+                [str(cli)], 2, stdout="unknown command", stderr=""
+            )
+            with patch.object(multica_deploy.subprocess, "run", return_value=completed):
+                self.assertTrue(
+                    multica_deploy._desktop_cli_capability(cli)
+                )
 
     def test_desktop_profile_preserves_credentials_and_endpoint(self):
         with tempfile.TemporaryDirectory() as directory:

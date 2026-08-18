@@ -137,7 +137,7 @@ Plane 是可选项。通过向导输入 URL，或使用 `--plane-url https://YOU
 
 ## 桌面端首次连接
 
-当前可用流程是：`deploy`/`upgrade` 默认使用官方滚动标签 `latest`；服务启动并通过 `/readyz` 后，工具从运行中容器的 OCI version label 检测真实版本，再从官方 release 下载同版本 Windows 安装包，保留本机 token/workspace，并把 CLI daemon 绑定到当前自托管地址。若 backend/frontend 版本标签不一致，或是没有正式版本标签的 `dev`/自定义镜像，桌面同步会安全跳过，不会混用版本。需要回滚或人工指定时可使用 `--image-tag vX.Y.Z` 或 `--desktop-version vX.Y.Z`。
+当前可用流程是：`deploy`/`upgrade` 默认使用官方滚动标签 `latest`；服务启动并通过 `/readyz` 后，工具从运行中容器的 OCI version label 检测真实版本，再从官方 release 下载同版本 Windows 安装包，保留本机 token/workspace，并把 CLI daemon 绑定到当前自托管地址。同步前还会探测 CLI 的 `daemon/profile` 能力；若 backend/frontend 版本标签不一致、没有正式版本标签、没有匹配桌面包或 CLI 不支持该能力，桌面同步会安全跳过，但 NAS 应用升级仍报告成功，不会混用版本。需要回滚或人工指定时可使用 `--image-tag vX.Y.Z` 或 `--desktop-version vX.Y.Z`。
 
 当前仍未实现服务器生成一次性配对码、二维码/设备码授权和配对撤销；首次登录仍需完成官方登录流程。版本同步和 endpoint 绑定不依赖把长期服务端密钥写入部署配置。
 
