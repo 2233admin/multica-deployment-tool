@@ -1,5 +1,9 @@
 # Multica 本地版一键部署包
 
+**语言 / Language:** [中文](#中文) | [English](#english)
+
+## 中文
+
 这是一个给 NAS 和自有 Linux 服务器使用的 Multica 本地版一键部署包。它通过安装器和向导完成目标主机检查、Docker Compose 部署、地址配置、登录配置、健康检查和安全更新。
 
 当前仓库名是 `multica-deployment-tool`，作为旧名兼容保留。更直观的仓库名候选是 `multica-local-deploy`；本阶段不直接重命名 GitHub 仓库。
@@ -192,3 +196,176 @@ python multica_deploy.py build --source-dir YOUR_MULTICA_CHECKOUT --image-tag lo
 ## License
 
 MIT。见许可证文件。
+
+## English
+
+# Multica Local Deployment Tool
+
+This repository provides a one-command deployment tool for self-hosted Multica on NAS devices and Linux servers. It guides you through target checks, Docker Compose deployment, address configuration, authentication setup, health checks, upgrades, and rollback.
+
+The repository name remains `multica-deployment-tool` for compatibility. A future name could be `multica-local-deploy`; the GitHub repository is not renamed in this release.
+
+## What this project solves
+
+You do not need to assemble Compose commands by hand or hard-code a particular NAS address. The wizard asks for the values that belong to your environment:
+
+- SSH management address and port;
+- target address used for binding and service-to-service checks;
+- browser origin, using LAN, NetBird, or a domain;
+- Multica, backend, and frontend ports;
+- OAuth callback origin;
+- optional Plane control-plane URL;
+- remote persistent directory, Docker path, user, and group.
+
+Multica is the service being deployed. Plane is an optional task control plane and may run on the same host or on another existing service. Gitea OAuth, GitHub App integration, and email verification are optional. NetBird is an optional network path, not a deployment dependency.
+
+## Quick start
+
+Requirements:
+
+1. A Synology Container Manager host or a Linux host with Docker.
+2. An SSH account that can run Docker directly or use passwordless `sudo`.
+3. Python 3.9+, `ssh`, and `scp` on the management machine.
+4. A Multica address reachable from both the management machine and the browser.
+
+```bash
+git clone https://github.com/2233admin/multica-deployment-tool.git
+cd multica-deployment-tool
+python3 install.py
+```
+
+On Windows:
+
+```powershell
+git clone https://github.com/2233admin/multica-deployment-tool.git
+cd multica-deployment-tool
+python .\install.py
+```
+
+The installer starts the wizard after checking Python, SSH, SCP, and the target Docker environment. Replace every `YOUR_*` placeholder with a value from your own environment.
+
+Without the installer:
+
+```bash
+python3 multica_deploy.py wizard
+```
+
+## Supported platforms and targets
+
+| Role | Supported scope |
+| --- | --- |
+| Management machine | Windows, Linux, macOS |
+| Remote target | Synology Container Manager or an SSH-managed Linux Docker host |
+| Local build machine | Windows/macOS Docker Desktop or Linux Docker |
+
+The remote workflow requires a POSIX shell, `curl`, `sed`, Docker, and Docker Compose. Windows Docker Desktop is supported as a local build machine; a Windows Docker host is not a current remote deployment target.
+
+`--nas-host` and `--nas-ip` are historical, compatibility-friendly option names. They do not require a NAS or contain a fixed address: `--nas-host` is the SSH management address and `--nas-ip` is the target bind/service address.
+
+## Wizard and configuration
+
+You provide the SSH address, reachable target address or URL, entry port, remote directory permissions, and the credentials for the selected login provider. With NetBird, set `--nas-ip` to the target's NetBird IPv4 address and add `--netbird`.
+
+The tool stores only non-sensitive settings for later `status`, `upgrade`, and `wizard` runs:
+
+- SSH address and port;
+- bind/service address, browser origin, and service origin;
+- OAuth origin and optional Plane URL;
+- Multica and Compose ports;
+- remote directory, Docker path, user/group, and image settings.
+
+JWT secrets, database passwords, SMTP passwords, OAuth secrets, and GitHub private keys remain on the target host. They are not committed to this repository or written into the desktop profile.
+
+## Login and OAuth
+
+The wizard supports Gitea OAuth, SMTP/Resend email verification, a test fixed-code mode, or deferred configuration. Gitea OAuth is the preferred private-network login path. GitHub App configuration is for repository and event integration; it does not replace Multica user authentication.
+
+The OAuth callback is built from the configured origin and fixed path:
+
+```text
+<oauth-origin>/auth/callback
+```
+
+Use separate `--browser-url`, `--service-url`, and `--oauth-origin` values when browser access, service-to-service traffic, and OAuth callbacks use different routes.
+
+## End-to-end onboarding
+
+1. **Install:** run the installer and confirm Python, SSH, SCP, and target Docker prerequisites.
+2. **Deploy:** the wizard writes the selected addresses and ports, starts Multica, and preserves existing databases and `.env` values.
+3. **Verify:** open the reported browser origin and run `status` to check `/health`, `/readyz`, containers, and optional Plane reachability.
+4. **Authenticate:** prefer Gitea OAuth for private deployments; email verification is available as a fallback. GitHub Device Flow is suitable for local desktop authorization.
+5. **Connect the desktop:** after deployment, the tool detects the actual backend/frontend runtime version and keeps the Windows desktop CLI/daemon on the same formal version.
+6. **Connect code sources:** after login, configure GitHub, Gitea, or another self-hosted Git provider in Multica's integration settings.
+
+## Deployment verification
+
+The completion report prints the browser origin, service health origin, OAuth callback, optional Plane URL, and `/readyz` result.
+
+```bash
+python3 multica_deploy.py deploy \
+  --nas-host YOUR_SSH_HOST \
+  --nas-ip YOUR_TARGET_ADDRESS \
+  --browser-url http://YOUR_BROWSER_HOST:YOUR_APP_PORT \
+  --service-url http://YOUR_SERVICE_HOST:YOUR_APP_PORT \
+  --oauth-origin http://YOUR_BROWSER_HOST:YOUR_APP_PORT \
+  --app-port YOUR_APP_PORT
+```
+
+After deployment:
+
+```bash
+python3 multica_deploy.py status \
+  --nas-host YOUR_SSH_HOST \
+  --nas-ip YOUR_TARGET_ADDRESS \
+  --app-port YOUR_APP_PORT
+```
+
+Plane is optional. Configure it with the wizard or `--plane-url https://YOUR_PLANE_HOST`; an unavailable or unconfigured Plane does not block Multica deployment.
+
+## Desktop CLI synchronization
+
+`deploy` and `upgrade` use the official rolling `latest` runtime tag by default. Once the service passes `/readyz`, the tool reads the OCI version labels from the running backend and frontend containers, downloads the matching Windows desktop release, preserves the local token and workspace, and binds the CLI daemon to the self-hosted endpoint.
+
+Before synchronization, the tool probes whether the installed CLI supports the daemon capability required for local profile/endpoint synchronization. If the runtime versions disagree, no formal version is available, no matching desktop release exists, or the CLI lacks the capability, desktop synchronization is skipped safely while the NAS application upgrade remains successful.
+
+Use `--image-tag vX.Y.Z` for a pinned runtime or rollback, and `--desktop-version vX.Y.Z` for an explicit desktop override. Initial login still uses the official login flow; one-time pairing codes, QR/device-code pairing, and pairing revocation are not implemented yet.
+
+## Common failures
+
+| Symptom | Action |
+| --- | --- |
+| SSH connection fails | Test `ssh YOUR_SSH_HOST`, verify the port and key, then rerun `wizard`. |
+| Docker is unavailable | Run `docker version`; on Synology, verify Container Manager and `--docker-path`. |
+| Browser cannot open the page | Check the browser origin, Caddy binding address, firewall, and port policy; then run `status`. |
+| `/readyz` fails | Run `doctor` and `logs --service backend`; verify service-to-service reachability on the target host. |
+| Gitea callback fails | Compare the exact OAuth origin, protocol, port, and callback path with the Gitea application. |
+| Login fails | Check the selected provider configuration, issuer, client ID, secret, callback, SMTP, or Resend settings. |
+| Desktop sync is skipped | Check the reported runtime labels, matching official desktop release, and whether the installed CLI exposes `daemon`. |
+| GitHub webhook does not work | Use a public HTTPS `--public-url`; LAN and NetBird addresses cannot replace a public webhook origin. |
+
+## Upgrades, rollback, and security
+
+Repeated `deploy` or `upgrade` runs preserve the target `.env`, database, and uploaded data while updating Compose, the entry configuration, and images. The default `latest` tag follows the official runtime; after the services start, the tool detects the actual running version and synchronizes the matching desktop CLI. Run `doctor` before an upgrade and use `rollback` when you need to restore the previous release. Do not delete database volumes.
+
+The management-machine configuration stores only non-sensitive deployment settings. Never commit `.env`, OAuth secrets, SMTP passwords, GitHub private keys, or SSH private keys. Use a correctly configured HTTPS reverse proxy and certificate before exposing the service publicly.
+
+## Advanced usage and contribution
+
+The main commands are `deploy`, `status`, `doctor`, `upgrade`, `rollback`, and `build`.
+
+For a local Multica source checkout:
+
+```bash
+python multica_deploy.py build \
+  --source-dir YOUR_MULTICA_CHECKOUT \
+  --image-tag local-20260817 \
+  --hot-update
+```
+
+`--hot-update` replaces backend and frontend one at a time, waits for backend `/readyz`, and keeps PostgreSQL, data volumes, and Caddy running. It is a low-downtime update mode, not browser HMR.
+
+Before submitting changes, run the complete Python test suite, a CLI help smoke test, and address/static-reference checks.
+
+## License
+
+MIT. See the license file.
