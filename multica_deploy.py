@@ -44,7 +44,9 @@ DEFAULTS = {
     "netbird": False,
     "nas_target": "/opt/multica",
     "source_dir": "",
-    "image_tag": "v0.4.28",
+    # Keep the default aligned with the current official Multica release.  A
+    # caller can still pin another tag explicitly for rollback or local builds.
+    "image_tag": "v0.4.29",
     "backend_image": "",
     "web_image": "",
     "github_device_flow_enabled": False,

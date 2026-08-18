@@ -15,7 +15,10 @@ class DeploymentToolTests(unittest.TestCase):
     def test_desktop_sync_defaults_and_opt_out(self):
         parser = multica_deploy.build_parser()
         base = ["upgrade", "--nas-host", "nas", "--nas-ip", "203.0.113.20"]
-        self.assertTrue(parser.parse_args(base).desktop_sync)
+        args = parser.parse_args(base)
+        self.assertTrue(args.desktop_sync)
+        self.assertEqual(args.image_tag, "v0.4.29")
+        self.assertEqual(args.desktop_version, "")
         self.assertFalse(parser.parse_args(base + ["--no-desktop-sync"]).desktop_sync)
 
     def test_desktop_version_follows_formal_image_tag(self):
@@ -605,8 +608,8 @@ class DeploymentToolTests(unittest.TestCase):
         self.assertEqual(state["MULTICA_IMAGE_TAG"], "v0.4.28")
         self.assertNotIn("JWT_SECRET", state)
 
-    def test_default_release_baseline_is_official_v0428(self):
-        self.assertEqual(multica_deploy.DEFAULTS["image_tag"], "v0.4.28")
+    def test_default_release_baseline_is_official_v0429(self):
+        self.assertEqual(multica_deploy.DEFAULTS["image_tag"], "v0.4.29")
         self.assertIn(
             "MULTICA_IMAGE_TAG=v0.4.28",
             (multica_deploy.PACKAGE_ROOT / ".env.template").read_text(encoding="utf-8"),
