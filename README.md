@@ -328,6 +328,8 @@ Plane is optional. Configure it with the wizard or `--plane-url https://YOUR_PLA
 
 Before synchronization, the tool probes whether the installed CLI supports the daemon capability required for local profile/endpoint synchronization. If the runtime versions disagree, no formal version is available, no matching desktop release exists, or the CLI lacks the capability, desktop synchronization is skipped safely while the NAS application upgrade remains successful.
 
+The default desktop profile is the CLI's default profile. Named profiles are opt-in with `--desktop-profile`. After a successful sync on Windows, the tool registers the CLI daemon in the current user's logon startup and disables the desktop UI's `autoStop` setting, so closing the desktop does not take the daemon offline. `doctor` reports drift between the NAS `.env` release and the recorded release state.
+
 Use `--image-tag vX.Y.Z` for a pinned runtime or rollback, and `--desktop-version vX.Y.Z` for an explicit desktop override. Initial login still uses the official login flow; one-time pairing codes, QR/device-code pairing, and pairing revocation are not implemented yet.
 
 ## Common failures

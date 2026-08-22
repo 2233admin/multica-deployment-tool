@@ -115,6 +115,36 @@ class DeploymentToolTests(unittest.TestCase):
             self.assertEqual(payload["token"], "local-token")
             self.assertEqual(payload["workspace_id"], "workspace-1")
 
+    def test_windows_daemon_startup_command_is_profile_explicit(self):
+        command = multica_deploy.windows_daemon_startup_command(
+            Path(r"C:\Users\test\multica.exe"), "desktop-api.multica.ai"
+        )
+        self.assertIn("multica.exe", command)
+        self.assertIn("--profile", command)
+        self.assertIn("desktop-api.multica.ai", command)
+
+    def test_default_desktop_profile_uses_cli_default_state(self):
+        self.assertEqual(multica_deploy.DEFAULTS["desktop_profile"], "")
+        command = multica_deploy.windows_daemon_startup_command(
+            Path(r"C:\Users\test\multica.exe"), ""
+        )
+        self.assertNotIn("--profile", command)
+
+    def test_desktop_lifecycle_disables_auto_stop_and_keeps_backup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app_data = Path(directory)
+            prefs = app_data / "Multica" / "desktop_prefs.json"
+            prefs.parent.mkdir(parents=True)
+            prefs.write_text('{"autoStart": true, "autoStop": true}\n', encoding="utf-8")
+            with patch.dict(multica_deploy.os.environ, {"APPDATA": str(app_data)}):
+                self.assertTrue(multica_deploy.configure_desktop_lifecycle())
+                self.assertFalse(multica_deploy.configure_desktop_lifecycle())
+            payload = json.loads(prefs.read_text(encoding="utf-8"))
+            self.assertFalse(payload["autoStop"])
+            self.assertTrue(
+                (prefs.with_name("desktop_prefs.json.pre-daemon-persistence.bak")).is_file()
+            )
+
     def test_parser_exposes_maintenance_commands(self):
         parser = multica_deploy.build_parser()
         for command in ("upgrade", "build", "doctor", "rollback"):
@@ -265,6 +295,38 @@ class DeploymentToolTests(unittest.TestCase):
         self.assertIn("MULTICA_NAS_IP='100.80.110.105'", config)
         self.assertIn("MULTICA_DOCKER_PATH='/var/packages/ContainerManager/target/usr/bin/docker'", config)
         self.assertNotIn("__NAS_", config)
+
+    def test_watchdog_restart_is_invoked_through_posix_shell(self):
+        args = argparse.Namespace(
+            no_sudo=False,
+            nas_target="/volume1/docker/multica",
+            nas_ip="100.80.110.105",
+            app_port=3010,
+            docker_path="/var/packages/ContainerManager/target/usr/bin/docker",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            rendered = Path(directory) / ".multica-watchdog.conf"
+            rendered.write_text("config\n", encoding="utf-8")
+            with patch.object(multica_deploy, "copy_to_nas"), patch.object(
+                multica_deploy, "render_watchdog_config", return_value=rendered
+            ), patch.object(multica_deploy, "remote") as remote:
+                multica_deploy.install_watchdog(args)
+        command = remote.call_args.args[1]
+        self.assertIn("sh /usr/local/etc/rc.d/S99multica-watchdog.sh restart", command)
+
+    def test_posix_watchdog_upload_normalizes_windows_line_endings(self):
+        args = argparse.Namespace(nas_host="nas", ssh_port=0, nas_target="/opt/multica")
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "watchdog.sh"
+            source.write_bytes(b"#!/bin/sh\r\nexit 0\r\n")
+            uploaded = {}
+
+            def capture(command, *, label):
+                uploaded["content"] = Path(command[-2]).read_bytes()
+
+            with patch.object(multica_deploy, "run", side_effect=capture):
+                multica_deploy.copy_to_nas(args, source)
+            self.assertEqual(uploaded["content"], b"#!/bin/sh\nexit 0\n")
 
     def test_platform_aliases_normalize_for_cross_arch_builds(self):
         self.assertEqual(multica_deploy.normalize_platform("x86_64"), "linux/amd64")
@@ -665,6 +727,14 @@ class DeploymentToolTests(unittest.TestCase):
             state = multica_deploy.read_release_state(args)
         self.assertEqual(state["MULTICA_IMAGE_TAG"], "v0.4.28")
         self.assertNotIn("JWT_SECRET", state)
+
+    def test_release_backup_prefers_env_over_stale_current_state(self):
+        args = argparse.Namespace(nas_target="/opt/multica")
+        with patch.object(multica_deploy, "remote") as remote:
+            multica_deploy.backup_release_state(args)
+        command = remote.call_args.args[1]
+        self.assertLess(command.index('if [ -f "$env_file" ]'), command.index('if [ ! -s "$state" ]'))
+        self.assertIn('MULTICA_IMAGE_TAG=', command)
 
     def test_default_release_mode_follows_running_runtime(self):
         self.assertEqual(multica_deploy.DEFAULTS["image_tag"], "latest")

@@ -65,7 +65,9 @@ DEFAULTS = {
     "platform": "auto",
     "desktop_sync": True,
     "desktop_version": "",
-    "desktop_profile": "desktop-api.multica.ai",
+    # Empty means the CLI's default profile. Named profiles are opt-in and
+    # isolate config/daemon state under ~/.multica/profiles/<name>.
+    "desktop_profile": "",
 }
 REQUIRED_FILES = (
     "docker-compose.selfhost.yml",
@@ -133,6 +135,8 @@ CONFIG_OPTIONS = {
 
 DESKTOP_RELEASE_API = "https://api.github.com/repos/multica-ai/multica/releases"
 DESKTOP_HEALTH_PORT = 19681
+WINDOWS_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+WINDOWS_RUN_VALUE = "MulticaCliDaemon"
 
 
 class ConfigError(ValueError):
@@ -329,7 +333,10 @@ def desktop_paths(profile: str) -> tuple[Path, Path, Path]:
     install_root = Path(local_app_data) / "Programs" / "@multicadesktop"
     desktop_exe = install_root / "Multica.exe"
     cli_exe = install_root / "resources" / "app.asar.unpacked" / "resources" / "bin" / "multica.exe"
-    profile_config = Path.home() / ".multica" / "profiles" / profile / "config.json"
+    profile_root = Path.home() / ".multica"
+    if profile:
+        profile_root = profile_root / "profiles" / profile
+    profile_config = profile_root / "config.json"
     return desktop_exe, cli_exe, profile_config
 
 
@@ -354,6 +361,66 @@ def _write_json_without_bom(path: Path, payload: dict[str, object]) -> None:
         )
     except OSError as exc:
         raise ConfigError(f"写入桌面端配置失败: {path}") from exc
+
+
+def desktop_prefs_path() -> Path:
+    app_data = os.environ.get("APPDATA")
+    if not app_data:
+        raise ConfigError("Windows 桌面端同步需要 APPDATA")
+    return Path(app_data) / "Multica" / "desktop_prefs.json"
+
+
+def configure_desktop_lifecycle() -> bool:
+    """Keep the desktop UI from stopping the independent CLI daemon."""
+
+    path = desktop_prefs_path()
+    current = _read_json(path)
+    if current.get("autoStop") is False:
+        return False
+    if path.is_file():
+        backup = path.with_name("desktop_prefs.json.pre-daemon-persistence.bak")
+        if not backup.exists():
+            try:
+                backup.write_bytes(path.read_bytes())
+            except OSError as exc:
+                raise ConfigError(f"备份桌面端生命周期配置失败: {backup}") from exc
+    current["autoStop"] = False
+    _write_json_without_bom(path, current)
+    return True
+
+
+def windows_daemon_startup_command(cli_exe: Path, profile: str) -> str:
+    return subprocess.list2cmdline(
+        [str(cli_exe), *_profile_cli_args(profile), "daemon", "start"]
+    )
+
+
+def _profile_cli_args(profile: str) -> list[str]:
+    return ["--profile", profile] if profile else []
+
+
+def configure_windows_daemon_persistence(cli_exe: Path, profile: str) -> bool:
+    """Start the CLI daemon at user logon, independently of the desktop UI."""
+
+    if os.name != "nt":
+        return False
+    try:
+        import winreg
+
+        with winreg.CreateKeyEx(
+            winreg.HKEY_CURRENT_USER, WINDOWS_RUN_KEY, 0, winreg.KEY_SET_VALUE
+        ) as key:
+            winreg.SetValueEx(
+                key,
+                WINDOWS_RUN_VALUE,
+                0,
+                winreg.REG_SZ,
+                windows_daemon_startup_command(cli_exe, profile),
+            )
+    except OSError as exc:
+        raise ConfigError("写入 Multica CLI daemon 用户登录自启动失败") from exc
+    configure_desktop_lifecycle()
+    return True
 
 
 def preserve_desktop_profile(server_url: str, profile: str) -> Path:
@@ -506,7 +573,7 @@ def _start_desktop_daemon(
     if not cli_exe.is_file():
         raise ConfigError(f"找不到桌面端 CLI: {cli_exe}")
     subprocess.run(
-        [str(cli_exe), "--profile", profile, "daemon", "stop"],
+        [str(cli_exe), *_profile_cli_args(profile), "daemon", "stop"],
         capture_output=True,
         text=True,
         check=False,
@@ -515,7 +582,7 @@ def _start_desktop_daemon(
     creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     try:
         subprocess.Popen(
-            [str(cli_exe), "--profile", profile, "daemon", "start"],
+            [str(cli_exe), *_profile_cli_args(profile), "daemon", "start"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             creationflags=creationflags,
@@ -660,6 +727,12 @@ def sync_desktop(args: argparse.Namespace, runtime_version: str = "") -> None:
             f"CLI={actual_cli_version or 'unknown'}）"
         )
         return
+    try:
+        configure_windows_daemon_persistence(cli_exe, profile)
+    except ConfigError as exc:
+        print(f"桌面端常驻配置失败：{exc}", file=sys.stderr)
+    else:
+        print("桌面端 CLI daemon 已配置为独立于桌面端的用户登录自启动。")
     print(f"桌面端同步完成：runtime/CLI v{desired} -> {health.get('server_url')}")
 
 
@@ -918,7 +991,27 @@ def copy_to_nas(
     args: argparse.Namespace, local_path: Path, *, remote_name: str | None = None
 ) -> None:
     destination = f"{args.nas_host}:{args.nas_target}/{remote_name or local_path.name}"
-    run(scp_base(args) + [str(local_path), destination], label=f"复制 {local_path.name}")
+    upload_path = local_path
+    temporary: Path | None = None
+    if local_path.suffix in {".sh", ".conf"}:
+        raw = local_path.read_bytes()
+        normalized = raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+        if normalized != raw:
+            handle = tempfile.NamedTemporaryFile(suffix=local_path.suffix, delete=False)
+            try:
+                handle.write(normalized)
+                handle.close()
+                temporary = Path(handle.name)
+                upload_path = temporary
+            except Exception:
+                handle.close()
+                Path(handle.name).unlink(missing_ok=True)
+                raise
+    try:
+        run(scp_base(args) + [str(upload_path), destination], label=f"复制 {local_path.name}")
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def render_watchdog_config(args: argparse.Namespace) -> Path:
@@ -937,7 +1030,7 @@ def render_watchdog_config(args: argparse.Namespace) -> Path:
     for source, value in replacements.items():
         template = template.replace(source, value.replace("'", "'\\''"))
     handle = tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8", suffix=".conf", delete=False
+        mode="w", encoding="utf-8", newline="\n", suffix=".conf", delete=False
     )
     try:
         handle.write(template)
@@ -979,7 +1072,9 @@ def install_watchdog(args: argparse.Namespace) -> None:
             args,
             f"install -m 0644 {config_file} /usr/local/etc/multica-watchdog.conf",
         ),
-        privileged(args, "/usr/local/etc/rc.d/S99multica-watchdog.sh restart"),
+        # Synology may report "No such file" when sudo tries to exec a copied
+        # script directly; invoke it through the resident POSIX shell.
+        privileged(args, "sh /usr/local/etc/rc.d/S99multica-watchdog.sh restart"),
     ]
     remote(
         args,
@@ -1015,11 +1110,7 @@ def backup_release_state(args: argparse.Namespace) -> None:
         env_file="$target/.env"
         current="$target/.multica-release.current"
         state='__STATE__'
-        if [ -f "$current" ]; then
-          umask 077
-          cp "$current" "$state"
-          chmod 600 "$state"
-        elif [ -f "$env_file" ]; then
+        if [ -f "$env_file" ]; then
           tag=$(sed -n 's/^MULTICA_IMAGE_TAG=//p' "$env_file" | tail -n 1)
           backend=$(sed -n 's/^MULTICA_BACKEND_IMAGE=//p' "$env_file" | tail -n 1)
           web=$(sed -n 's/^MULTICA_WEB_IMAGE=//p' "$env_file" | tail -n 1)
@@ -1031,6 +1122,11 @@ def backup_release_state(args: argparse.Namespace) -> None:
               "$tag" "$backend" "$web" "$backend_ref" "$web_ref" > "$state"
             chmod 600 "$state"
           fi
+        fi
+        if [ ! -s "$state" ] && [ -f "$current" ]; then
+          umask 077
+          cp "$current" "$state"
+          chmod 600 "$state"
         fi
         """
     ).strip()
@@ -2856,6 +2952,20 @@ def doctor(args: argparse.Namespace) -> None:
             "printf 'curl=%s\\n' \"$(curl --version | head -n 1)\"",
             f"if test -f {q(args.nas_target + '/.env')}; then printf 'multica_env=present\\n'; else printf 'multica_env=missing\\n'; fi",
             (
+                "configured_tag=$(sed -n 's/^MULTICA_IMAGE_TAG=//p' "
+                + q(args.nas_target + "/.env")
+                + " 2>/dev/null | tail -n 1); "
+                + "recorded_tag=$(sed -n 's/^MULTICA_IMAGE_TAG=//p' "
+                + q(args.nas_target + "/.multica-release.current")
+                + " 2>/dev/null | tail -n 1); "
+                + "printf 'configured_release=%s\\n' \"$configured_tag\"; "
+                + "printf 'recorded_release=%s\\n' \"$recorded_tag\"; "
+                + "if test -n \"$configured_tag\" && test -n \"$recorded_tag\" "
+                + "&& test \"$configured_tag\" = \"$recorded_tag\"; then "
+                + "printf 'release_state=aligned\\n'; "
+                + "else printf 'release_state=drift-or-incomplete\\n'; fi"
+            ),
+            (
                 "if test -f "
                 + q(args.nas_target + "/.env")
                 + "; then "
@@ -3097,13 +3207,11 @@ def deploy(args: argparse.Namespace) -> None:
         wait_for_backend_ready(args, addresses)
     print("安装 NAS 级 Multica watchdog...")
     install_watchdog(args)
-    runtime_version = ""
-    if getattr(args, "desktop_sync", False) and os.name == "nt":
-        runtime_version = detect_runtime_version(args)
-        if runtime_version:
-            print(f"已检测 NAS runtime 版本：{runtime_version}")
-        elif not getattr(args, "desktop_version", ""):
-            print("未检测到 NAS runtime 的正式版本标签；桌面端同步将按安全策略跳过。")
+    runtime_version = detect_runtime_version(args)
+    if runtime_version:
+        print(f"已检测 NAS runtime 版本：{runtime_version}")
+    elif getattr(args, "desktop_sync", False) and os.name == "nt" and not getattr(args, "desktop_version", ""):
+        print("未检测到 NAS runtime 的正式版本标签；桌面端同步将按安全策略跳过。")
     write_current_release_state(args, runtime_version)
     sync_desktop(args, runtime_version)
     print(f"部署完成: 浏览器入口 {addresses.browser_origin}")

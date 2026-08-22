@@ -125,17 +125,19 @@ Plane 是可选的。使用向导输入 URL，或传 `--plane-url https://YOUR_P
 
 ## Windows 桌面端同步
 
-在 Windows 管理机上，桌面端同步默认开启，并跟随正式的 `--image-tag`。例如升级到 Multica `v0.4.28`：
+在 Windows 管理机上，桌面端同步默认开启，并跟随正式的 `--image-tag`。例如升级到 Multica `v0.4.32`：
 
 ```powershell
 python .\multica_deploy.py upgrade `
   --nas-host YOUR_SSH_HOST --nas-ip YOUR_TARGET_ADDRESS `
-  --image-tag v0.4.28
+  --image-tag v0.4.32
 ```
 
 工具会保留已有 token 和 workspace，把桌面端 profile 的 `server_url`/`app_url` 恢复为当前自托管地址，并验证本地 `/health`。版本不匹配时才下载对应的官方 Windows 安装包；安装包会校验 SHA-256。
 
-如果只想更新 NAS，使用 `--no-desktop-sync`；如果部署镜像是开发标签，可使用 `--desktop-version v0.4.28` 显式指定桌面端版本。profile 改写前会生成 `config.json.pre-desktop-sync.bak`。
+如果只想更新 NAS，使用 `--no-desktop-sync`；如果部署镜像是开发标签，可使用 `--desktop-version v0.4.32` 显式指定桌面端版本。profile 改写前会生成 `config.json.pre-desktop-sync.bak`。默认使用 CLI 的默认 profile；只有显式传 `--desktop-profile NAME` 时才使用隔离 profile。
+
+桌面同步完成后，工具会把 CLI daemon 注册到当前 Windows 用户的登录自启动，并把桌面端的 `autoStop` 关闭。因此关闭桌面 UI 不会再把 CLI daemon 一起停掉；`doctor` 还会检查 NAS 的配置版本和 release 记录是否漂移。
 
 旧的 `compat/windows/client-bootstrap.ps1` 仍可用于只绑定 CLI 的设备；需要随部署自动更新桌面端时，应使用 Python 的 `deploy`/`upgrade`/`build` 入口。
 
@@ -157,6 +159,7 @@ python .\multica_deploy.py upgrade `
 | GitHub webhook 不工作 | 确认 `--public-url` 是公网 HTTPS origin，并检查 GitHub App setup/webhook URL；LAN/NetBird 地址不能替代公网 webhook。 |
 | 代码源连接失败 | 先确认 Multica 登录，再检查代码源 provider、仓库权限、仓库选择和连接测试；不要把代码源 secret 写进本地部署 JSON。 |
 | 桌面端失败 | 当前没有配对码；先区分 URL 不可达、服务未启动和浏览器登录失败。 |
+| 桌面端关闭后 CLI 离线 | 重新运行 `upgrade`/`build` 的桌面同步；检查 `daemon status`，确认用户登录自启动已注册。 |
 
 ## 更新和安全
 
