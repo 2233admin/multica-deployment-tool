@@ -93,7 +93,7 @@ OAuth 回调由你输入的 origin 和固定回调路径构造：
 
 例如使用域名时，把同一个 origin 配置到 Gitea OAuth 应用；使用 NetBird 时，确保浏览器和 Gitea 都能访问该 NetBird 地址。需要让浏览器入口、服务间入口和 OAuth origin 不同时，分别填写 `--browser-url`、`--service-url` 和 `--oauth-origin`。
 
-部署时会做两层回调门禁：替换容器前，工具比较目标 `.env` 的 `GITEA_REDIRECT_URI` 与 `<oauth-origin>/auth/callback`；后端启动后，再比较运行中的 `/api/config`。任一不一致，都会在替换前端前停止部署。
+部署时会做两层回调门禁：替换容器前，工具比较目标 `.env` 的 `GITEA_REDIRECT_URI` 与 `<oauth-origin>/auth/callback`；服务启动后，再比较运行中的 `/api/config`。任一不一致，部署都会失败；使用 `--hot-update` 时会在替换前端前拦截。
 
 ## 一体化 onboarding 主流程
 

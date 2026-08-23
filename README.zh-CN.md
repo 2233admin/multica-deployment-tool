@@ -97,7 +97,7 @@ python .\install.py
 
 请把部署完成报告中的完整 URL 原样复制到 Gitea 应用。协议、主机、端口和路径都必须一致。使用 NetBird 或域名时，确认浏览器和 Gitea 都能访问该 origin。
 
-部署工具现在会做两层回调门禁：先检查 NAS `.env` 的 `GITEA_REDIRECT_URI`，服务启动后再检查运行中 `/api/config` 返回的回调地址。任一地址与本次 `<oauth-origin>/auth/callback` 不一致，部署会在替换前端前停止，并提示修正 `--oauth-origin` 或 Gitea 应用登记值。
+部署工具现在会做两层回调门禁：先检查 NAS `.env` 的 `GITEA_REDIRECT_URI`，服务启动后再检查运行中 `/api/config` 返回的回调地址。任一地址与本次 `<oauth-origin>/auth/callback` 不一致，部署会失败并提示修正 `--oauth-origin` 或 Gitea 应用登记值；使用 `--hot-update` 时还会在替换前端前拦截。
 
 ## 一体化 onboarding 主流程
 
