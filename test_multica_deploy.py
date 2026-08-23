@@ -426,6 +426,52 @@ class DeploymentToolTests(unittest.TestCase):
         self.assertIn("GITEA_REDIRECT_URI http://192.0.2.10:3010/auth/callback", script)
         self.assertIn("upsert MULTICA_PUBLIC_URL https://multica.example.com", script)
 
+    def test_oauth_preflight_rejects_stale_callback(self):
+        args = argparse.Namespace(nas_target="/opt/multica")
+        addresses = multica_deploy.TargetAddresses(
+            bind_address="192.0.2.10",
+            browser_origin="http://192.0.2.10:3010",
+            service_origin="http://192.0.2.10:3010",
+            oauth_origin="http://192.0.2.10:3010",
+        )
+        output = (
+            "GITEA_ISSUER_URL=https://git.example.test\n"
+            "GITEA_CLIENT_ID=client-1\n"
+            "GITEA_REDIRECT_URI=http://old.example.test/auth/callback\n"
+        )
+        with patch.object(multica_deploy, "remote_capture", return_value=output):
+            with self.assertRaisesRegex(multica_deploy.ConfigError, "回调地址不一致"):
+                multica_deploy.validate_remote_oauth_settings(args, addresses)
+
+    def test_oauth_preflight_accepts_matching_callback(self):
+        args = argparse.Namespace(nas_target="/opt/multica")
+        addresses = multica_deploy.TargetAddresses(
+            bind_address="192.0.2.10",
+            browser_origin="http://192.0.2.10:3010",
+            service_origin="http://192.0.2.10:3010",
+            oauth_origin="http://192.0.2.10:3010",
+        )
+        output = (
+            "GITEA_ISSUER_URL=https://git.example.test\n"
+            "GITEA_CLIENT_ID=client-1\n"
+            "GITEA_REDIRECT_URI=http://192.0.2.10:3010/auth/callback\n"
+        )
+        with patch.object(multica_deploy, "remote_capture", return_value=output):
+            settings = multica_deploy.validate_remote_oauth_settings(args, addresses)
+        self.assertEqual(settings["GITEA_CLIENT_ID"], "client-1")
+
+    def test_live_oauth_check_rejects_runtime_without_callback_contract(self):
+        args = argparse.Namespace()
+        addresses = multica_deploy.TargetAddresses(
+            bind_address="192.0.2.10",
+            browser_origin="http://192.0.2.10:3010",
+            service_origin="http://192.0.2.10:3010",
+            oauth_origin="http://192.0.2.10:3010",
+        )
+        with patch.object(multica_deploy, "remote_capture", return_value='{"gitea_client_id":"client-1"}'):
+            with self.assertRaisesRegex(multica_deploy.ConfigError, "没有暴露"):
+                multica_deploy.verify_live_oauth_config(args, addresses, {"GITEA_CLIENT_ID": "client-1"})
+
     def test_initialize_env_renders_device_flow_without_public_url(self):
         args = argparse.Namespace(
             nas_target="/opt/multica",

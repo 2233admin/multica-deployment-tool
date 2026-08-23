@@ -97,6 +97,8 @@ python .\install.py
 
 请把部署完成报告中的完整 URL 原样复制到 Gitea 应用。协议、主机、端口和路径都必须一致。使用 NetBird 或域名时，确认浏览器和 Gitea 都能访问该 origin。
 
+部署工具现在会做两层回调门禁：先检查 NAS `.env` 的 `GITEA_REDIRECT_URI`，服务启动后再检查运行中 `/api/config` 返回的回调地址。任一地址与本次 `<oauth-origin>/auth/callback` 不一致，部署会在替换前端前停止，并提示修正 `--oauth-origin` 或 Gitea 应用登记值。
+
 ## 一体化 onboarding 主流程
 
 一次安装按以下顺序完成：
@@ -153,7 +155,7 @@ python .\multica_deploy.py upgrade `
 | Docker 失败 | 在目标主机运行 `docker version`；Synology 检查 Container Manager 路径和 `--docker-path`。 |
 | 页面打不开 | 检查浏览器 origin、Caddy 绑定地址、防火墙和端口，然后运行 `status`。 |
 | `/readyz` 失败 | 运行 `doctor` 和 `logs --service backend`，确认服务间 origin 从目标主机可达。 |
-| Gitea 回调失败 | 对照最终报告，逐字符检查协议、域名、端口和 `/auth/callback`。 |
+| Gitea 回调失败 | 重新从部署报告中的浏览器入口开始登录；工具会检查 `.env` 和运行时 `/api/config` 的回调是否与 `<oauth-origin>/auth/callback` 一致。 |
 | Plane 不可达 | 从管理机和目标主机分别测试 Plane URL；未配置 Plane 不影响 Multica。 |
 | GitHub 本地授权失败 | 本地桌面授权使用 GitHub Device Flow；确认桌面端/官方 CLI 支持该流程，不要把 GitHub 长期 token 粘贴到部署配置。 |
 | GitHub webhook 不工作 | 确认 `--public-url` 是公网 HTTPS origin，并检查 GitHub App setup/webhook URL；LAN/NetBird 地址不能替代公网 webhook。 |

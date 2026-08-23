@@ -93,6 +93,8 @@ OAuth 回调由你输入的 origin 和固定回调路径构造：
 
 例如使用域名时，把同一个 origin 配置到 Gitea OAuth 应用；使用 NetBird 时，确保浏览器和 Gitea 都能访问该 NetBird 地址。需要让浏览器入口、服务间入口和 OAuth origin 不同时，分别填写 `--browser-url`、`--service-url` 和 `--oauth-origin`。
 
+部署时会做两层回调门禁：替换容器前，工具比较目标 `.env` 的 `GITEA_REDIRECT_URI` 与 `<oauth-origin>/auth/callback`；后端启动后，再比较运行中的 `/api/config`。任一不一致，都会在替换前端前停止部署。
+
 ## 一体化 onboarding 主流程
 
 把一次安装理解为下面六个阶段。每个阶段都要完成后再进入下一阶段：
@@ -155,7 +157,7 @@ Plane 是可选项。通过向导输入 URL，或使用 `--plane-url https://YOU
 | Docker 不可用 | 在目标主机运行 `docker version`；Synology 用户确认 Container Manager 路径和 `--docker-path`。 |
 | 页面打不开 | 检查浏览器 origin 是否可达、Caddy 绑定地址、防火墙和端口策略；再运行 `status`。 |
 | `/readyz` 失败 | 运行 `doctor` 和 `logs --service backend`；确认目标主机能访问服务间 origin。 |
-| Gitea 回调失败 | 对照最终报告的完整回调 URL；检查 Gitea 应用的协议、域名、端口和路径是否完全一致。 |
+| Gitea 回调失败 | 从部署报告中的浏览器入口重新开始登录；工具会检查 `.env` 和运行时 `/api/config` 是否与 `<oauth-origin>/auth/callback` 一致，不一致会停止部署。 |
 | Plane 不可达 | 确认 Plane URL 的协议和端口；从管理机和目标主机分别测试该 URL。Plane 未配置时不会影响 Multica。 |
 | 登录失败 | 确认选中的登录方式已配置；Gitea 看 issuer、Client ID、secret 和回调，邮箱登录看 SMTP/Resend。 |
 | GitHub 本地授权失败 | 本地桌面授权应使用 GitHub Device Flow；确认桌面端/官方 CLI 支持该流程，不要把 GitHub 长期 token 粘贴到部署配置。 |

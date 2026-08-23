@@ -1324,6 +1324,75 @@ __CHOWN__
     remote(args, script)
 
 
+def validate_remote_oauth_settings(
+    args: argparse.Namespace, addresses: TargetAddresses
+) -> dict[str, str]:
+    """Reject a stale Gitea callback before replacing application containers."""
+
+    output = remote_capture(
+        args,
+        "for key in GITEA_ISSUER_URL GITEA_CLIENT_ID GITEA_REDIRECT_URI; do "
+        + "value=$(sed -n \"s/^${key}=//p\" "
+        + q(args.nas_target + "/.env")
+        + " 2>/dev/null | head -n 1); printf '%s=%s\\n' \"$key\" \"$value\"; done",
+    )
+    values = {}
+    for line in output.splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key in {"GITEA_ISSUER_URL", "GITEA_CLIENT_ID", "GITEA_REDIRECT_URI"}:
+            values[key] = value.strip()
+
+    configured = {key for key, value in values.items() if value}
+    if not configured:
+        return values
+    required = {"GITEA_ISSUER_URL", "GITEA_CLIENT_ID", "GITEA_REDIRECT_URI"}
+    missing = sorted(required - configured)
+    if missing:
+        raise ConfigError(
+            "Gitea OAuth 配置不完整，缺少: " + ", ".join(missing) + "。"
+        )
+    actual = values["GITEA_REDIRECT_URI"].rstrip("/")
+    expected = addresses.oauth_callback_url
+    if actual != expected:
+        raise ConfigError(
+            "Gitea OAuth 回调地址不一致：NAS .env 为 "
+            f"{actual}，本次部署应为 {expected}。请显式传入 --oauth-origin，"
+            "确认它已登记在 Gitea OAuth 应用后再部署。"
+        )
+    print(f"Gitea OAuth 回调预检: {actual}（已对齐）")
+    return values
+
+
+def verify_live_oauth_config(
+    args: argparse.Namespace,
+    addresses: TargetAddresses,
+    oauth_settings: dict[str, str],
+) -> None:
+    """Confirm the running backend exposes the same callback contract."""
+
+    if not oauth_settings:
+        return
+    endpoint = addresses.service_origin.rstrip("/") + "/api/config"
+    try:
+        payload = json.loads(
+            remote_capture(args, f"curl -fsS --max-time 5 {q(endpoint)}")
+        )
+    except (json.JSONDecodeError, RuntimeError) as exc:
+        raise ConfigError("无法读取运行中 Multica 的 /api/config，OAuth 校验未通过。") from exc
+    actual = str(payload.get("gitea_redirect_uri", "")).strip().rstrip("/")
+    expected = addresses.oauth_callback_url
+    if not actual:
+        raise ConfigError(
+            "当前运行镜像没有暴露 gitea_redirect_uri；请使用包含自托管 Gitea 回调修复的 Multica 镜像。"
+        )
+    if actual != expected:
+        raise ConfigError(
+            "运行中 Multica 的 Gitea 回调地址不一致："
+            f"{actual} != {expected}。部署已停止前端更新。"
+        )
+    print(f"Gitea OAuth 运行时校验: {actual}（已对齐）")
+
+
 def update_backend_env(
     args: argparse.Namespace,
     values: dict[str, str],
@@ -3179,6 +3248,7 @@ def deploy(args: argparse.Namespace) -> None:
 
     print("[4/6] 初始化或更新非敏感配置（保留部署目标上已有密钥）...")
     initialize_remote_env(args)
+    oauth_settings = validate_remote_oauth_settings(args, addresses)
     remote(
         args,
         f"sed -i -E 's|subnet: [0-9.]+/[0-9]+|subnet: {args.network_subnet}|' "
@@ -3205,6 +3275,7 @@ def deploy(args: argparse.Namespace) -> None:
         print("[6/6] 启动服务并等待数据库迁移完成...")
         remote(args, f"{compose_command} up -d --remove-orphans")
         wait_for_backend_ready(args, addresses)
+    verify_live_oauth_config(args, addresses, oauth_settings)
     print("安装 NAS 级 Multica watchdog...")
     install_watchdog(args)
     runtime_version = detect_runtime_version(args)
