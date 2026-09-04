@@ -11,6 +11,7 @@ run Docker directly.
 from __future__ import annotations
 
 import argparse
+import difflib
 import getpass
 import hashlib
 import ipaddress
@@ -736,6 +737,49 @@ def render_caddy(args: argparse.Namespace) -> Path:
     finally:
         handle.close()
     return Path(handle.name)
+
+
+def fetch_remote_caddyfile(args: argparse.Namespace) -> str:
+    """Return the Caddyfile currently on the deployment target, or "" when none exists yet."""
+
+    path = q(args.nas_target + "/Caddyfile")
+    return remote_capture(args, f"cat {path} 2>/dev/null || true")
+
+
+def check_caddyfile_drift(args: argparse.Namespace, rendered: str) -> None:
+    """Refuse to silently discard a hand-edited Caddyfile already on the target.
+
+    Every other file this tool manages preserves existing state: ``.env`` is only
+    ever upserted key-by-key, never replaced wholesale (see ``update_backend_env``).
+    The Caddyfile has no such protection today — it is fully re-rendered from the
+    template and pushed on every deploy/upgrade/rollback. An operator who hand-edits
+    the live Caddyfile (wider ``bind`` addresses, extra routes) gets no warning
+    before the next deploy wipes those edits. ``--yes`` opts out for scripted
+    redeploys that know the target's Caddyfile is untouched.
+    """
+
+    if getattr(args, "yes", False):
+        return
+    existing = fetch_remote_caddyfile(args)
+    if not existing.strip() or existing == rendered:
+        return
+    diff = "\n".join(
+        difflib.unified_diff(
+            existing.splitlines(),
+            rendered.splitlines(),
+            fromfile="部署目标上现有的 Caddyfile",
+            tofile="这次要写入的 Caddyfile",
+            lineterm="",
+        )
+    )
+    raise RuntimeError(
+        "部署目标上的 Caddyfile 内容和这次要写入的不一样，说明有人在部署目标上手工改过它"
+        "（例如放宽了 bind 监听地址，或加了模板里没有的路由）。直接部署会不打招呼地把这些"
+        "手工改动覆盖掉。\n"
+        f"{diff}\n"
+        "确认要用模板渲染结果覆盖，重新运行时加 --yes；要保留手工改动，就先把改动内容合并"
+        "进仓库的 Caddyfile 源文件，让它成为渲染结果的一部分，再部署。"
+    )
 
 
 def initialize_remote_env(args: argparse.Namespace) -> None:
@@ -1847,6 +1891,7 @@ def deploy(args: argparse.Namespace) -> None:
         copy_to_nas(args, PACKAGE_ROOT / name)
     rendered_caddy = render_caddy(args)
     try:
+        check_caddyfile_drift(args, rendered_caddy.read_text(encoding="utf-8"))
         copy_to_nas(args, rendered_caddy)
         remote(
             args,
@@ -2049,8 +2094,11 @@ def add_deploy_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--network-subnet", default=DEFAULTS["network_subnet"])
     parser.add_argument("--owner", default=DEFAULTS["owner"])
     parser.add_argument("--group", default=DEFAULTS["group"])
-
-
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="部署目标上的 Caddyfile 有未同步的手工修改时仍强制覆盖",
+    )
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Multica NAS 内网部署工具（Python 标准库，无 pip 依赖）"

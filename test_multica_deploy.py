@@ -276,6 +276,42 @@ class DeploymentToolTests(unittest.TestCase):
             self.assertNotIn("GITEA_CLIENT_SECRET", payload)
             self.assertEqual(payload["nas_host"], "nas")
 
+    def test_deploy_options_expose_yes_flag(self):
+        parser = multica_deploy.build_parser()
+        for command in ("deploy", "upgrade", "build"):
+            args = parser.parse_args(
+                [command, "--nas-host", "nas", "--nas-ip", "203.0.113.20"]
+                + (["--source-dir", ".."] if command == "build" else [])
+            )
+            self.assertFalse(args.yes)
+
+    def test_caddyfile_drift_blocks_overwrite_without_yes(self):
+        args = argparse.Namespace(nas_target="/volume1/docker/multica", yes=False)
+        hand_edited = "http://100.80.110.105:3010 {\n  bind 100.80.110.105 192.168.50.130\n}\n"
+        rendered = "http://100.80.110.105:3010 {\n  bind 100.80.110.105\n}\n"
+        with patch.object(multica_deploy, "remote_capture", return_value=hand_edited):
+            with self.assertRaises(RuntimeError) as ctx:
+                multica_deploy.check_caddyfile_drift(args, rendered)
+        self.assertIn("192.168.50.130", str(ctx.exception))
+        self.assertIn("--yes", str(ctx.exception))
+
+    def test_caddyfile_drift_check_skipped_with_yes(self):
+        args = argparse.Namespace(nas_target="/volume1/docker/multica", yes=True)
+        with patch.object(multica_deploy, "remote_capture") as capture:
+            multica_deploy.check_caddyfile_drift(args, "anything")
+        capture.assert_not_called()
+
+    def test_caddyfile_drift_ignored_when_target_has_no_existing_file(self):
+        args = argparse.Namespace(nas_target="/volume1/docker/multica", yes=False)
+        with patch.object(multica_deploy, "remote_capture", return_value=""):
+            multica_deploy.check_caddyfile_drift(args, "http://203.0.113.20:3010 {\n}\n")
+
+    def test_caddyfile_drift_ignored_when_content_matches(self):
+        args = argparse.Namespace(nas_target="/volume1/docker/multica", yes=False)
+        rendered = "http://203.0.113.20:3010 {\n  bind 203.0.113.20\n}\n"
+        with patch.object(multica_deploy, "remote_capture", return_value=rendered):
+            multica_deploy.check_caddyfile_drift(args, rendered)
+
 
 if __name__ == "__main__":
     unittest.main()
