@@ -1,0 +1,73 @@
+name: CI
+
+# Nothing ran these tests before: the repo ships six test modules (101 tests)
+# and README.md:192 states the norm "run Python tests, CLI help smoke test and
+# address dynamic checks before committing", but no workflow enforced it.
+# This runs the suite that already exists; it adds no new gates beyond what the
+# project documents.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # README.md:31 and :228 declare "Python 3.9+"; the newer entry is what
+        # the project is actually developed on.
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.9", "3.13"]
+        exclude:
+          # The suite uses only stdlib and local modules, so the OS axis adds
+          # little beyond a path-separator check; keep the full Python axis.
+          - os: windows-latest
+            python-version: "3.9"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Show interpreter
+        run: python --version
+
+      - name: Install pytest
+        run: python -m pip install --disable-pip-version-check pytest
+
+      # The suite is unittest-based and imports only stdlib plus sibling
+      # modules, so it runs from the repository root with no install step.
+      - name: Run tests
+        run: python -m pytest -q --no-header
+
+  cli-smoke:
+    name: CLI help smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # README.md:192 names the CLI help smoke test alongside the Python tests.
+      # --help must exit 0 without touching a deployment target.
+      - name: multica_deploy --help
+        run: python multica_deploy.py --help
+
+      - name: fleet_plan --help
+        run: python fleet_plan.py --help
