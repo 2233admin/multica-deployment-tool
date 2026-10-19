@@ -1,8 +1,10 @@
 name: CI
 
-# Nothing ran these tests before: the repo ships six test modules (101 tests)
-# and README.md:192 states the norm "run Python tests, CLI help smoke test and
-# address dynamic checks before committing", but no workflow enforced it.
+# Nothing ran these tests before: the repo ships seven test modules (101 tests
+# collected; six at the repository root plus one under
+# adapters/agent-plugins-multica/) and README.md:192 states the norm "run Python
+# tests, CLI help smoke test and address dynamic checks before committing", but
+# no workflow enforced it.
 # This runs the suite that already exists; it adds no new gates beyond what the
 # project documents.
 
