@@ -1,12 +1,16 @@
 name: CI
 
-# Nothing ran these tests before: the repo ships seven test modules (101 tests
+# Nothing ran these tests before. The repo ships seven test modules (101 tests
 # collected; six at the repository root plus one under
-# adapters/agent-plugins-multica/) and README.md:192 states the norm "run Python
-# tests, CLI help smoke test and address dynamic checks before committing", but
-# no workflow enforced it.
-# This runs the suite that already exists; it adds no new gates beyond what the
-# project documents.
+# adapters/agent-plugins-multica/), and README.md:192 documents the project's
+# own pre-commit norm:
+#
+#   "提交改动前运行完整 Python 测试、CLI help smoke test 和地址静态搜索。"
+#
+# Nothing under .github enforced any of it. This workflow covers the first two
+# clauses -- the full Python test suite and the CLI help smoke test. It does
+# NOT run the third (地址静态搜索, the static address search), so a green run
+# here is not evidence that the whole documented norm was satisfied.
 
 on:
   push:
