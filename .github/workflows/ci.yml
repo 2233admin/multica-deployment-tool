@@ -1,3 +1,4 @@
+# 5070X owned-branch acceptance; existing checks are unchanged.
 name: CI
 
 # Nothing ran these tests before. The repo ships seven test modules (101 tests
