@@ -93,6 +93,8 @@ OAuth 回调由你输入的 origin 和固定回调路径构造：
 
 例如使用域名时，把同一个 origin 配置到 Gitea OAuth 应用；使用 NetBird 时，确保浏览器和 Gitea 都能访问该 NetBird 地址。需要让浏览器入口、服务间入口和 OAuth origin 不同时，分别填写 `--browser-url`、`--service-url` 和 `--oauth-origin`。
 
+部署时会做两层回调门禁：替换容器前，工具比较目标 `.env` 的 `GITEA_REDIRECT_URI` 与 `<oauth-origin>/auth/callback`；服务启动后，再比较运行中的 `/api/config`。任一不一致，部署都会失败；使用 `--hot-update` 时会在替换前端前拦截。
+
 ## 一体化 onboarding 主流程
 
 把一次安装理解为下面六个阶段。每个阶段都要完成后再进入下一阶段：
@@ -155,7 +157,7 @@ Plane 是可选项。通过向导输入 URL，或使用 `--plane-url https://YOU
 | Docker 不可用 | 在目标主机运行 `docker version`；Synology 用户确认 Container Manager 路径和 `--docker-path`。 |
 | 页面打不开 | 检查浏览器 origin 是否可达、Caddy 绑定地址、防火墙和端口策略；再运行 `status`。 |
 | `/readyz` 失败 | 运行 `doctor` 和 `logs --service backend`；确认目标主机能访问服务间 origin。 |
-| Gitea 回调失败 | 对照最终报告的完整回调 URL；检查 Gitea 应用的协议、域名、端口和路径是否完全一致。 |
+| Gitea 回调失败 | 从部署报告中的浏览器入口重新开始登录；工具会检查 `.env` 和运行时 `/api/config` 是否与 `<oauth-origin>/auth/callback` 一致，不一致会停止部署。 |
 | Plane 不可达 | 确认 Plane URL 的协议和端口；从管理机和目标主机分别测试该 URL。Plane 未配置时不会影响 Multica。 |
 | 登录失败 | 确认选中的登录方式已配置；Gitea 看 issuer、Client ID、secret 和回调，邮箱登录看 SMTP/Resend。 |
 | GitHub 本地授权失败 | 本地桌面授权应使用 GitHub Device Flow；确认桌面端/官方 CLI 支持该流程，不要把 GitHub 长期 token 粘贴到部署配置。 |
@@ -327,6 +329,8 @@ Plane is optional. Configure it with the wizard or `--plane-url https://YOUR_PLA
 `deploy` and `upgrade` use the official rolling `latest` runtime tag by default. Once the service passes `/readyz`, the tool reads the OCI version labels from the running backend and frontend containers, downloads the matching Windows desktop release, preserves the local token and workspace, and binds the CLI daemon to the self-hosted endpoint.
 
 Before synchronization, the tool probes whether the installed CLI supports the daemon capability required for local profile/endpoint synchronization. If the runtime versions disagree, no formal version is available, no matching desktop release exists, or the CLI lacks the capability, desktop synchronization is skipped safely while the NAS application upgrade remains successful.
+
+The default desktop profile is the CLI's default profile. Named profiles are opt-in with `--desktop-profile`. After a successful sync on Windows, the tool registers the CLI daemon in the current user's logon startup and disables the desktop UI's `autoStop` setting, so closing the desktop does not take the daemon offline. `doctor` reports drift between the NAS `.env` release and the recorded release state.
 
 Use `--image-tag vX.Y.Z` for a pinned runtime or rollback, and `--desktop-version vX.Y.Z` for an explicit desktop override. Initial login still uses the official login flow; one-time pairing codes, QR/device-code pairing, and pairing revocation are not implemented yet.
 
