@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import difflib
 import getpass
 import hashlib
 import ipaddress
@@ -38,6 +39,12 @@ PACKAGE_ROOT = Path(__file__).resolve().parent
 DOCKER_PATH = "docker"
 PRODUCT_NAME = "Multica 本地版一键部署包"
 LEGACY_REPOSITORY_NAME = "multica-deployment-tool"
+# Matches docker-compose.nas.yml's networks.default.name. Kept in sync by
+# hand: compose does not expose the network name to a plain remote command.
+COMPOSE_NETWORK_NAME = "multica_default"
+# Pinned, not :latest, matching this project's own image-pinning discipline.
+# Small, official, single-purpose image used only as a throwaway network probe.
+GITEA_BACKCHANNEL_PROBE_IMAGE = "curlimages/curl:8.21.0"
 DEFAULTS = {
     "nas_host": "",
     "nas_ip": "",
@@ -1129,6 +1136,49 @@ def render_caddy(args: argparse.Namespace) -> Path:
     return Path(handle.name)
 
 
+def fetch_remote_caddyfile(args: argparse.Namespace) -> str:
+    """Return the Caddyfile currently on the deployment target, or "" when none exists yet."""
+
+    path = q(args.nas_target + "/Caddyfile")
+    return remote_capture(args, f"cat {path} 2>/dev/null || true")
+
+
+def check_caddyfile_drift(args: argparse.Namespace, rendered: str) -> None:
+    """Refuse to silently discard a hand-edited Caddyfile already on the target.
+
+    Every other file this tool manages preserves existing state: ``.env`` is only
+    ever upserted key-by-key, never replaced wholesale (see ``update_backend_env``).
+    The Caddyfile has no such protection today — it is fully re-rendered from the
+    template and pushed on every deploy/upgrade/rollback. An operator who hand-edits
+    the live Caddyfile (wider ``bind`` addresses, extra routes) gets no warning
+    before the next deploy wipes those edits. ``--yes`` opts out for scripted
+    redeploys that know the target's Caddyfile is untouched.
+    """
+
+    if getattr(args, "yes", False):
+        return
+    existing = fetch_remote_caddyfile(args)
+    if not existing.strip() or existing == rendered:
+        return
+    diff = "\n".join(
+        difflib.unified_diff(
+            existing.splitlines(),
+            rendered.splitlines(),
+            fromfile="部署目标上现有的 Caddyfile",
+            tofile="这次要写入的 Caddyfile",
+            lineterm="",
+        )
+    )
+    raise RuntimeError(
+        "部署目标上的 Caddyfile 内容和这次要写入的不一样，说明有人在部署目标上手工改过它"
+        "（例如放宽了 bind 监听地址，或加了模板里没有的路由）。直接部署会不打招呼地把这些"
+        "手工改动覆盖掉。\n"
+        f"{diff}\n"
+        "确认要用模板渲染结果覆盖，重新运行时加 --yes；要保留手工改动，就先把改动内容合并"
+        "进仓库的 Caddyfile 源文件，让它成为渲染结果的一部分，再部署。"
+    )
+
+
 def initialize_remote_env(args: argparse.Namespace) -> None:
     addresses = resolve_target_addresses(args)
     script = """
@@ -1368,6 +1418,70 @@ def configure_email(args: argparse.Namespace, *, production_mode: bool = False) 
     print("邮箱配置已写入 NAS，并已重建 backend。现在可以重新发送验证码测试。")
 
 
+def validate_gitea_backend_host_override(value: str) -> None:
+    """Validate the optional "hostname:ip" pair used as a Docker extra_hosts entry."""
+
+    host_part, sep, ip_part = value.partition(":")
+    if not sep or not host_part or not ip_part:
+        raise ConfigError(
+            "Gitea 直连地址映射格式必须是「域名:IP」，例如 git.example.com:192.168.1.10。"
+        )
+    try:
+        ipaddress.ip_address(ip_part)
+    except ValueError as exc:
+        raise ConfigError(f"Gitea 直连地址映射里的 IP 无效: {ip_part}") from exc
+
+
+def gitea_backchannel_status(args: argparse.Namespace) -> tuple[str, str]:
+    """Probe whether the deployment target can reach the Gitea OAuth
+    token-exchange address, from a container on the same Docker network the
+    backend runs on.
+
+    Returns ("not_configured", "") when Gitea login is not set up on this
+    target. The probe runs in a throwaway container rather than execing into
+    the backend container itself: the backend image is an external, custom
+    build this repository neither builds nor carries, so its tooling cannot
+    be assumed. Any container on the same bridge network reproduces the
+    routing/NAT path that actually broke token exchange in the incident this
+    check exists to catch (the failure was specific to that network's route
+    to the LAN, not to the backend container individually).
+    """
+
+    env_file = q(args.nas_target + "/.env")
+    keys = ("GITEA_ISSUER_URL", "GITEA_CLIENT_ID", "GITEA_BACKEND_HOST_OVERRIDE")
+    probe = " ; ".join(f"grep -m1 '^{key}=' {env_file} || true" for key in keys)
+    values: dict[str, str] = {}
+    for line in remote_capture(args, probe).splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            values[key] = value
+
+    issuer = values.get("GITEA_ISSUER_URL", "")
+    client_id = values.get("GITEA_CLIENT_ID", "")
+    if not issuer or not client_id:
+        return "not_configured", ""
+
+    parsed = urllib.parse.urlparse(issuer)
+    if not parsed.hostname:
+        return "unreachable", f"GITEA_ISSUER_URL 无法解析主机名: {issuer}"
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    _, _, resolve_ip = values.get("GITEA_BACKEND_HOST_OVERRIDE", "").partition(":")
+    target = f"{parsed.scheme}://{parsed.hostname}:{port}/"
+    resolve_flag = (
+        f"--resolve {q(f'{parsed.hostname}:{port}:{resolve_ip}')} " if resolve_ip else ""
+    )
+    check = (
+        f"{privileged(args, q(docker_path(args)))} run --rm --network {COMPOSE_NETWORK_NAME} "
+        f"{GITEA_BACKCHANNEL_PROBE_IMAGE} "
+        f"curl -sS --max-time 5 -o /dev/null -w '%{{http_code}}' {resolve_flag}{q(target)}"
+    )
+    try:
+        output = remote_capture(args, check)
+    except RuntimeError as exc:
+        return "unreachable", str(exc)
+    return "reachable", output.strip()
+
+
 def configure_gitea_auth(args: argparse.Namespace) -> None:
     """Configure the self-hosted Gitea OAuth2/OIDC login provider."""
 
@@ -1385,6 +1499,15 @@ def configure_gitea_auth(args: argparse.Namespace) -> None:
     redirect = urllib.parse.urlparse(redirect_uri)
     if redirect.scheme not in {"http", "https"} or not redirect.netloc or redirect.query or redirect.fragment:
         raise ConfigError("Multica 回调地址必须是没有查询参数或片段的 http(s) URL。")
+    backend_host_override = prompt_default(
+        "部署目标直连 Gitea 的「域名:IP」映射（仅当上面这个 Gitea 地址在部署目标内部"
+        "访问不到、但同一个 Gitea 在另一个地址可达时才需要，例如公网域名只在外部可达、"
+        "或反向代理只监听容器网络路由不到的接口；格式如 git.example.com:192.168.1.10；"
+        "留空表示不需要）",
+        "",
+    ).strip()
+    if backend_host_override:
+        validate_gitea_backend_host_override(backend_host_override)
     update_backend_env(
         args,
         {
@@ -1392,9 +1515,25 @@ def configure_gitea_auth(args: argparse.Namespace) -> None:
             "GITEA_CLIENT_ID": client_id,
             "GITEA_CLIENT_SECRET": client_secret,
             "GITEA_REDIRECT_URI": redirect_uri,
+            "GITEA_BACKEND_HOST_OVERRIDE": backend_host_override,
         },
     )
-    print("Gitea 登录已写入 NAS，并已重建 backend。刷新登录页即可看到“使用 Gitea 登录”。")
+    gitea_status, gitea_detail = gitea_backchannel_status(args)
+    if gitea_status == "unreachable":
+        raise RuntimeError(
+            "Gitea 配置已写入 NAS 并重建了 backend，但部署目标连不通换 token 用的地址"
+            f"（{gitea_detail}）。浏览器授权会成功，登录会在换 token 这一步失败。"
+            "如果这个 Gitea 地址只在浏览器所在网络可达、部署目标到不了，重新运行一次 "
+            "gitea 命令，并填写「部署目标直连 Gitea 的域名:IP 映射」"
+            "（GITEA_BACKEND_HOST_OVERRIDE）。"
+        )
+    if gitea_status == "reachable":
+        print(
+            f"Gitea 登录已写入 NAS，并已重建 backend；回程可达性检查通过（HTTP {gitea_detail}）。"
+            "刷新登录页即可看到“使用 Gitea 登录”。"
+        )
+    else:
+        print("Gitea 登录已写入 NAS，并已重建 backend。刷新登录页即可看到“使用 Gitea 登录”。")
 
 
 def configure_plugins(args: argparse.Namespace) -> None:
@@ -2917,6 +3056,13 @@ def doctor(args: argparse.Namespace) -> None:
             print(f"readyz={response.status}")
     except (urllib.error.URLError, TimeoutError) as exc:
         print(f"readyz=unreachable ({exc})", file=sys.stderr)
+    gitea_status, gitea_detail = gitea_backchannel_status(args)
+    if gitea_status == "not_configured":
+        print("gitea_backchannel=not_configured")
+    elif gitea_status == "reachable":
+        print(f"gitea_backchannel=reachable(http={gitea_detail})")
+    else:
+        print(f"gitea_backchannel=unreachable ({gitea_detail})", file=sys.stderr)
     print("诊断完成；没有修改 NAS。")
 
 
@@ -3059,6 +3205,7 @@ def deploy(args: argparse.Namespace) -> None:
     else:
         rendered_caddy = render_caddy(args)
         try:
+            check_caddyfile_drift(args, rendered_caddy.read_text(encoding="utf-8"))
             copy_to_nas(args, rendered_caddy)
             remote(
                 args,
@@ -3095,6 +3242,16 @@ def deploy(args: argparse.Namespace) -> None:
         print("[6/6] 启动服务并等待数据库迁移完成...")
         remote(args, f"{compose_command} up -d --remove-orphans")
         wait_for_backend_ready(args, addresses)
+    gitea_status, gitea_detail = gitea_backchannel_status(args)
+    if gitea_status == "unreachable":
+        raise RuntimeError(
+            f"应用健康检查通过，但 Gitea OAuth 回程不可达（{gitea_detail}）。"
+            "浏览器登录会在换 token 这一步失败，这次部署不算完成。"
+            "运行一次 gitea 命令重新配置直连地址映射，或修好部署目标到 Gitea 的网络路径后"
+            "重新部署。"
+        )
+    if gitea_status == "reachable":
+        print(f"Gitea 回程可达性检查通过（HTTP {gitea_detail}）。")
     print("安装 NAS 级 Multica watchdog...")
     install_watchdog(args)
     runtime_version = ""
@@ -3132,6 +3289,14 @@ def status(args: argparse.Namespace) -> None:
     remote(args, f"{compose(args)} ps")
     print("\n就绪检查:")
     remote(args, f"curl -fsS --max-time 5 {q(addresses.service_origin)}/readyz")
+    print("\nGitea 回程可达性:")
+    gitea_status, gitea_detail = gitea_backchannel_status(args)
+    if gitea_status == "not_configured":
+        print("未配置 Gitea 登录，跳过。")
+    elif gitea_status == "reachable":
+        print(f"正常（HTTP {gitea_detail}）")
+    else:
+        raise RuntimeError(f"Gitea OAuth 回程不可达（{gitea_detail}）：浏览器登录会在换 token 这一步失败。")
     try:
         with urllib.request.urlopen(
             addresses.browser_origin.rstrip("/") + "/health", timeout=5
@@ -3309,8 +3474,11 @@ def add_deploy_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--network-subnet", default=DEFAULTS["network_subnet"])
     parser.add_argument("--owner", default=DEFAULTS["owner"])
     parser.add_argument("--group", default=DEFAULTS["group"])
-
-
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="部署目标上的 Caddyfile 有未同步的手工修改时仍强制覆盖",
+    )
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=f"{PRODUCT_NAME}（兼容项目名：{LEGACY_REPOSITORY_NAME}；Python 标准库，无 pip 依赖）"
