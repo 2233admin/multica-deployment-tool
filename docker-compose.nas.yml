@@ -1,4 +1,13 @@
 services:
+  backend:
+    # Backend must reach Gitea for OAuth token exchange and the VCS integration, but the
+    # container cannot reach the NAS LAN NIC (192.168.50.130): hairpin drops. Map the
+    # hostname to the multica_default bridge gateway instead (GITEA_BACKEND_HOST_OVERRIDE
+    # in .env, format host:ip). Kept in this override file on purpose: the base
+    # docker-compose.selfhost.yml was once replaced wholesale on the NAS (2026-08-27) and
+    # the extra_hosts block was lost with it. The default is a harmless placeholder.
+    extra_hosts:
+      - "${GITEA_BACKEND_HOST_OVERRIDE:-unused.invalid:127.0.0.1}"
   caddy:
     image: caddy:2.10-alpine
     network_mode: host
